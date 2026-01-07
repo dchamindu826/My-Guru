@@ -1,88 +1,96 @@
 import os
+import PyPDF2
 import google.generativeai as genai
-from supabase import create_client, Client
+from supabase import create_client
 from dotenv import load_dotenv
-from pypdf import PdfReader
 
-# 1. Config Load කරගැනීම
 load_dotenv()
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Supabase Connect කිරීම
-supabase: Client = create_client(
-    os.getenv("SUPABASE_URL"), 
-    os.getenv("SUPABASE_KEY")
-)
+# Configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+# Initialize Clients
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+genai.configure(api_key=GOOGLE_API_KEY)
 
 def get_embedding(text):
-    # Gemini Embedding Model එක පාවිච්චි කරලා Text එක Numbers වලට හරවනවා
+    """Generates vector embedding for text chunk"""
     result = genai.embed_content(
         model="models/text-embedding-004",
         content=text,
-        task_type="retrieval_document",
-        title="O/L Content"
+        task_type="retrieval_document"
     )
     return result['embedding']
 
-def process_pdf(pdf_path, subject, grade):
-    print(f"🔄 Processing {pdf_path}...")
-    
-    reader = PdfReader(pdf_path)
-    full_text = ""
-    
-    # පිටුවෙන් පිටුව කියවලා Text එක ගන්නවා
-    for page in reader.pages:
-        text = page.extract_text()
-        if text:
-            full_text += text + "\n"
-            
-    # Text එක කොටස් (Chunks) වලට කඩනවා (වචන 500න් 500ට වගේ)
-    # ලොකු පාඩමක් එකපාර දාන්න බෑ, පොඩි කෑලි වලට කඩන්න ඕන
-    chunk_size = 1000 
-    chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
-    
-    print(f"📊 Found {len(chunks)} chunks. Uploading to Supabase...")
+def process_pdf(file_path):
+    print(f"📖 Reading: {file_path}...")
+    text = ""
+    try:
+        with open(file_path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+    except Exception as e:
+        print(f"❌ Error reading PDF: {e}")
+        return
 
-    for i, chunk in enumerate(chunks):
+    # Chunking (Text එක කොටස් වලට කැඩීම)
+    # Gemini එකට එකපාර ලොකු ගොඩක් දාන්න බෑ, ඒකයි කඩන්නේ.
+    chunk_size = 1000  # අකුරු 1000 කෑලි
+    overlap = 200      # සම්බන්ධය තියාගන්න පොඩි කොටසක් රිපීට් කරනවා
+    
+    start = 0
+    chunks = []
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+        start += (chunk_size - overlap)
+
+    print(f"🧩 Split into {len(chunks)} chunks. Uploading to DB...")
+
+    # Upload to Supabase
+    count = 0
+    for chunk in chunks:
         try:
             vector = get_embedding(chunk)
-            
             data = {
                 "content": chunk,
-                "metadata": {"subject": subject, "grade": grade, "chunk_index": i},
-                "embedding": vector
+                "embedding": vector,
+                "metadata": {"source": os.path.basename(file_path)}
             }
-            
-            # Database එකට Save කිරීම
-            supabase.table("documents").insert(data).execute()
-            print(f"✅ Chunk {i+1}/{len(chunks)} saved.")
-            
+            supabase.table('documents').insert(data).execute()
+            count += 1
+            print(f"✅ Chunk {count}/{len(chunks)} uploaded.")
         except Exception as e:
-            print(f"❌ Error in chunk {i}: {e}")
+            print(f"⚠️ Upload failed for chunk: {e}")
+
+def main():
+    # 1. Folder එක බලන්න
+    folder_name = "knowledge"
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)
+        print(f"📂 '{folder_name}' folder created. Please put your PDFs inside it and run again.")
+        return
+
+    # 2. PDF Files හොයන්න
+    files = [f for f in os.listdir(folder_name) if f.endswith('.pdf')]
+    
+    if not files:
+        print(f"⚠️ No PDFs found in '{folder_name}' folder.")
+        return
+
+    print(f"🚀 Found {len(files)} PDFs. Starting ingestion...")
+    
+    for file in files:
+        file_path = os.path.join(folder_name, file)
+        process_pdf(file_path)
+
+    print("\n🎉 All Done! Your bot is now trained.")
 
 if __name__ == "__main__":
-    # මෙතන ඔයාගේ PDF file එකේ නම දෙන්න
-    # PDF එක මේ folder එකටම දාගන්න ලේසියට
-    pdf_name = "science_ol.pdf" 
-    
-    # PDF එකක් නැත්නම් දැනට මේ විදිහට test කරන්න text එකක් යවලා:
-    # process_pdf("sample.pdf", "Science", "11") කියලා run කරන්න එපා file එක නැත්නම්.
-    
-    print("PDF එකක් project folder එකට දාලා code එකේ 'pdf_name' වෙනස් කරන්න.")
-    # උදාහරණයට මම කෙලින්ම text එකක් දාන්නම් test කරන්න:
-    
-    sample_text = """
-    විද්‍යාව 10 ශ්‍රේණිය - නිව්ටන්ගේ නියම.
-    නිව්ටන්ගේ පළමු නියමය: බාහිර අසන්තුලිත බලයක් නොයෙදෙන තාක් කල් වස්තුවක් නිශ්චලතාවයේ හෝ ඒකාකාර ප්‍රවේගයෙන් සරල රේඛීයව චලනය වේ.
-    නිව්ටන්ගේ දෙවන නියමය: වස්තුවක ගම්‍යතාව වෙනස් වීමේ වේගය යොදන බලයට අනුලෝමව සමානුපාතික වන අතර බලයේ දිශාවට සිදුවේ. F=ma.
-    """
-    
-    print("Testing with sample text...")
-    vec = get_embedding(sample_text)
-    supabase.table("documents").insert({
-        "content": sample_text,
-        "metadata": {"subject": "Science", "topic": "Newton Laws"},
-        "embedding": vec
-    }).execute()
-    
-    print("🎉 Test Data Uploaded Successfully!")
+    main()
