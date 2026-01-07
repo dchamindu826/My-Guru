@@ -19,7 +19,6 @@ genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-flash-latest')
 
 def send_whatsapp_message(to_number, message):
-    """සාමාන්‍ය Text Message යවන Function එක"""
     url = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -36,14 +35,12 @@ def send_whatsapp_message(to_number, message):
         print(f"Error sending message: {e}")
 
 def send_interactive_buttons(to_number, text, buttons):
-    """Buttons යවන විශේෂ Function එක"""
     url = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }
     
-    # Buttons JSON එක හදමු
     button_list = []
     for btn_id, btn_title in buttons.items():
         button_list.append({
@@ -66,64 +63,101 @@ def send_interactive_buttons(to_number, text, buttons):
     except Exception as e:
         print(f"Error sending buttons: {e}")
 
-def get_ai_response(user_message):
-    """AI එකෙන් උත්තර ගන්න Function එක (Subject එක Type කළාම)"""
-    # මෙතන පස්සේ ඔයාගේ RAG Logic (Supabase search) එක එනවා.
-    # දැනට අපි කෙලින්ම AI එකට කතා කරමු.
-    
-    prompt = f"""
-    You are a friendly Sri Lankan Tuition Teacher named 'My Guru'.
-    The student is asking about: "{user_message}".
-    
-    If the user asks for a specific subject (Science, Maths, etc.), explain a key concept briefly.
-    Answer in a mix of Sinhala and English (Singlish allowed if helpful) or pure Sinhala.
-    Keep it encouraging and helpful.
-    """
+def get_rag_response(user_message):
+    """Database එකෙන් Context එක අරගෙන, ලස්සන සිංහලෙන් උත්තර දෙන තැන"""
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        # 1. User ගේ ප්‍රශ්නයට අදාළ Embedding එක ගන්න
+        embedding = genai.embed_content(
+            model="models/text-embedding-004",
+            content=user_message,
+            task_type="retrieval_query"
+        )['embedding']
+
+        # 2. Supabase එකෙන් ඊට සමාන කොටස් හොයනවා (Threshold එක 0.4 ට දැම්මා, නැත්නම් සමහර විට අහු වෙන්නේ නෑ)
+        response = supabase.rpc(
+            'match_documents',
+            {
+                'query_embedding': embedding,
+                'match_threshold': 0.4, 
+                'match_count': 4
+            }
+        ).execute()
+
+        # Context එක ගොඩනගනවා
+        context_text = "\n\n".join([doc['content'] for doc in response.data])
+        
+        # Context එකක් හම්බුනේ නැත්නම් (පොතේ නෑ)
+        if not context_text:
+            return "පුතේ, ඔයා අහපු දේ මම දාගෙන ඉන්න Note වල නෑනේ. 🤔\n\nවෙන විදිහකට අහල බලමුද? නැත්නම් Page Number එක ෂුවර් ද?"
+
+        # 3. AI එකට උපදෙස් (Persona) - මෙතන තමයි භාෂාව හදන්නේ
+        prompt = f"""
+        You are 'Guru Masters', a super friendly and cool Sri Lankan O/L Tuition Teacher.
+        
+        YOUR PERSONALITY:
+        - Talk like a real Sri Lankan person (Spoken Sinhala + English Mix).
+        - Use words like: "පුතේ" (Son/Kid), "මචං" (Machan - only if casual), "පොඩ්ඩක් බලමු", "වැඩේ ගොඩ", "Example එකක් ගත්තොත්".
+        - NEVER speak in formal/written Sinhala (Do not use 'ඔබ', 'සඳහා', 'වෙත').
+        - Be encouraging and fun.
+        
+        INSTRUCTIONS:
+        - Answer the student's question ONLY using the provided [CONTEXT] below.
+        - If the answer is not in the context, say you don't know based on the notes.
+        - Explain things simply.
+        
+        [CONTEXT FROM TEXTBOOK]:
+        {context_text}
+        
+        STUDENT QUESTION:
+        "{user_message}"
+        
+        ANSWER (In Spoken Sinhala/Singlish):
+        """
+        
+        result = model.generate_content(prompt)
+        return result.text
+
     except Exception as e:
-        return "සමාවෙන්න පුතේ, පොඩි තාක්ෂණික දෝෂයක්. ආයේ උත්සාහ කරන්න."
+        print(f"AI Error: {e}")
+        return "පොඩි ටෙක්නිකල් අවුලක් පුතේ. විනාඩියකින් ආයේ ට්‍රයි එකක් දෙමු."
 
 async def process_user_message(phone_number, user_message, message_type="text"):
     print(f"📩 Message from {phone_number} [{message_type}]: {user_message}")
 
     # --- FLOW LOGIC ---
 
-    # 1. මුලින්ම Language එක අහමු (Start / Hi)
-    if user_message.lower() in ["hi", "hello", "start", "menu", "ආයුබෝවන්"]:
+    # 1. Start / Menu
+    if str(user_message).lower() in ["hi", "hello", "start", "menu", "ආයුබෝවන්"]:
         buttons = {
-            "lang_si": "Sinhala සිංහල",
-            "lang_en": "English",
-            "lang_ta": "Tamil தமிழ்"
+            "lang_si": "Sinhala 🇱🇰",
+            "lang_en": "English 🇬🇧"
         }
-        send_interactive_buttons(phone_number, "Welcome to My Guru! 🎓\nPlease select your language:", buttons)
+        send_interactive_buttons(phone_number, "ආයුබෝවන් පුතේ! Welcome to My Guru. 🎓\n\nඅපි මොන භාෂාවෙන්ද ඉගෙන ගන්නේ?", buttons)
         return
 
-    # 2. Language එක තෝරගත්තම -> Exam එක අහමු
-    if user_message in ["lang_si", "lang_en", "lang_ta"]:
-        # මෙතනදි ඕන නම් Database එකේ language එක save කරගන්න පුළුවන් (user table update)
-        
+    # 2. Language Selection
+    if user_message in ["lang_si", "lang_en"]:
         exam_buttons = {
-            "exam_ol": "G.C.E. O/L",
-            "exam_al": "G.C.E. A/L"
+            "exam_ol": "G.C.E. O/L 📚",
+            "exam_al": "G.C.E. A/L 🎓"
         }
-        send_interactive_buttons(phone_number, "හොඳයි! ඔයා සූදානම් වෙන්නේ මොන විභාගයටද? 👇", exam_buttons)
+        send_interactive_buttons(phone_number, "එළකිරි! දැන් කියන්න ඔයාගේ විභාගය මොකක්ද?", exam_buttons)
         return
 
-    # 3. Exam එක තෝරගත්තම -> Subject එක Type කරන්න කියමු
+    # 3. Exam Selection -> Ask for Subject
     if user_message in ["exam_ol", "exam_al"]:
-        msg = "එළකිරි! දැන් ඔයාට ඉගෙන ගන්න ඕන **Subject (විෂය)** එකේ නම Type කරන්න.\n\nඋදාහරණ:\n- Science\n- Maths\n- History\n- Commerce"
+        msg = "නියමයි! දැන් ඔයාට ඕන **Subject එකයි, පාඩමේ නමයි** Type කරලා එවන්න.\n\nඋදාහරණ:\n👉 Science - Light (ආලෝකය)\n👉 History - Kotte Kingdom"
         send_whatsapp_message(phone_number, msg)
         return
 
-    # 4. වෙන මොනවා හරි ලිව්වොත් -> ඒක Subject එකක් කියලා හිතලා AI එකෙන් උත්තර දෙමු
-    ai_reply = get_ai_response(user_message)
-    send_whatsapp_message(phone_number, ai_reply)
+    # 4. Handle Subject/Question using RAG
+    # RAG function එක Call කරනවා (Button IDs නෙවෙයි නම් විතරයි)
+    if message_type == "text":
+        ai_reply = get_rag_response(user_message)
+        send_whatsapp_message(phone_number, ai_reply)
 
-    # 5. Database Update (Log)
+    # 5. Log Chat
     try:
-        # Check User
         response = supabase.table('users').select("*").eq('phone_number', phone_number).execute()
         if not response.data:
             user = supabase.table('users').insert({"phone_number": phone_number}).execute()
@@ -131,11 +165,10 @@ async def process_user_message(phone_number, user_message, message_type="text"):
         else:
             user_id = response.data[0]['id']
 
-        # Log Chat
         supabase.table('chat_logs').insert({
             "user_id": user_id,
             "message_user": user_message,
             "message_bot": ai_reply if message_type == "text" else "Interactive Flow"
         }).execute()
     except Exception as e:
-        print(f"DB Error: {e}")
+        print(f"DB Log Error: {e}")
