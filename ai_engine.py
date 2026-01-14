@@ -1,125 +1,135 @@
 import os
-import requests
 import google.generativeai as genai
-from supabase import create_client, Client
+from supabase import create_client
 from dotenv import load_dotenv
+import whatsapp_utils
 
 load_dotenv()
 
-# Setup Configurations
+# Setup
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 
-# Initialize Clients
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-flash-latest')
+model = genai.GenerativeModel('gemini-1.5-flash') # Best for Multimodal
 
-def send_whatsapp_message(to_number, message):
-    url = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "text": {"body": message}
-    }
-    requests.post(url, headers=headers, json=data)
-
-def send_interactive_buttons(to_number, text, buttons):
-    url = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    button_list = []
-    for btn_id, btn_title in buttons.items():
-        button_list.append({
-            "type": "reply",
-            "reply": {"id": btn_id, "title": btn_title}
-        })
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "interactive",
-        "interactive": {
-            "type": "button",
-            "body": {"text": text},
-            "action": {"buttons": button_list}
-        }
-    }
-    requests.post(url, headers=headers, json=data)
-
-def get_rag_response(user_message):
+def get_rag_context(query_text):
+    """Database එකෙන් අදාල විස්තර හොයනවා"""
     try:
-        # 1. Embed Query
         embedding = genai.embed_content(
             model="models/text-embedding-004",
-            content=user_message,
+            content=query_text,
             task_type="retrieval_query"
         )['embedding']
 
-        # 2. Search Supabase
         response = supabase.rpc(
             'match_documents',
             {
                 'query_embedding': embedding,
-                'match_threshold': 0.3, 
+                'match_threshold': 0.3,
                 'match_count': 5
             }
         ).execute()
 
-        context_text = "\n\n".join([doc['content'] for doc in response.data])
-        
-        # 3. Strict Prompt for "My Guru" & Simple Personality
-        prompt = f"""
-        ඔයාගේ නම 'My Guru'. ඔයා හරිම කරුණාවන්ත, ලොකු දැනුමක් තියෙන ගුරුවරයෙක්.
-        
-        පිළිපැදිය යුතු නීති:
-        1. කිසිම වෙලාවක ඔයාගේ නම 'Guru Masters' කියලා කියන්න එපා. නම සැමවිටම 'My Guru' විය යුතුයි.
-        2. ශිෂ්‍යයාට සැමවිටම "පුතේ" හෝ "දුවේ" කියා අමතන්න.
-        3. ඉතාම සරල, පැහැදිලි සිංහල භාෂාවෙන් උත්තර දෙන්න. අමාරු වචන පාවිච්චි කරන්න එපා.
-        4. ලබා දී ඇති [CONTEXT] එකේ ඇති තොරතුරු පමණක් පාවිච්චි කරන්න.
-        5. [CONTEXT] එකේ නැති දෙයක් ඇහුවොත්, බොරු කියන්න එපා. "පුතේ, ඒ ගැන විස්තර මගේ සටහන් වල දැනට නෑ, අපි වෙන දෙයක් ගැන ඉගෙන ගමුද?" වගේ දෙයක් කියන්න.
-        6. භාෂාව මිත්‍රශීලී විය යුතුයි. "මචං" වැනි වචන කිසිසේත් භාවිතා නොකරන්න.
-        
-        [CONTEXT]:
-        {context_text}
-        
-        ශිෂ්‍යයාගේ ප්‍රශ්නය:
-        "{user_message}"
-        
-        පිළිතුර (සරල සිංහලෙන්):
-        """
-        
-        result = model.generate_content(prompt)
-        return result.text
-
+        return "\n\n".join([doc['content'] for doc in response.data])
     except Exception as e:
-        print(f"AI Error: {e}")
-        return "පුතේ, පොඩි තාක්ෂණික ප්‍රශ්නයක් ආවා. අපි ආයෙත් උත්සාහ කරමුද?"
+        print(f"RAG Error: {e}")
+        return ""
 
-async def process_user_message(phone_number, user_message, message_type="text"):
-    # Flow Logic
-    if str(user_message).lower() in ["hi", "hello", "start", "menu", "ආයුබෝවන්"]:
-        buttons = {"lang_si": "Sinhala 🇱🇰", "lang_en": "English 🇬🇧"}
-        send_interactive_buttons(phone_number, "ආයුබෝවන් පුතේ! 'My Guru' වෙත ඔයාව සාදරයෙන් පිළිගන්නවා. 🙏\n\nඅපි ඉගෙන ගන්නේ මොන භාෂාවෙන්ද?", buttons)
-        return
+def generate_guru_response(user_input, context, media_file=None, media_type=None):
+    """ශිෂ්‍යයාට උත්තරේ හදනවා (Text, Audio හෝ Image inputs එක්ක)"""
+    
+    system_prompt = f"""
+    ඔයාගේ නම 'My Guru'. ඔයා කරුණාවන්ත ගුරුවරයෙක්.
+    
+    උපදෙස්:
+    1. ශිෂ්‍යයාට "පුතේ" හෝ "දුවේ" කියන්න.
+    2. ඉතාම සරල සිංහලෙන් උත්තර දෙන්න.
+    3. පහත දී ඇති [CONTEXT] (පොතේ විස්තර) පාවිච්චි කරලම උත්තර දෙන්න.
+    4. ශිෂ්‍යයා පින්තූරයක් එව්වොත්, ඒක පොතේ තියෙන දෙයක් එක්ක ගලපලා විස්තර කරන්න.
+    5. Context එකේ නැති දෙයක් ඇහුවොත්, "පුතේ, ඒක අපේ පාඩම් පොතේ නෑනේ" කියලා කියන්න.
 
-    if user_message in ["lang_si", "lang_en"]:
-        exam_buttons = {"exam_ol": "G.C.E. O/L 📚", "exam_al": "G.C.E. A/L 🎓"}
-        send_interactive_buttons(phone_number, "හොඳයි පුතේ! ඔයා සූදානම් වෙන්නේ මොන විභාගයටද?", exam_buttons)
-        return
+    [CONTEXT FROM TEXTBOOK]:
+    {context}
+    """
 
-    if user_message in ["exam_ol", "exam_al"]:
-        send_whatsapp_message(phone_number, "ඉතාම හොඳයි. දැන් ඔයාට ඉගෙන ගන්න ඕන විෂය (Subject) සහ පාඩමේ නම එවන්න පුතේ. මම ඔයාට ඒක සරලව කියලා දෙන්නම්.\n\nඋදාහරණ:\nScience - ආලෝකය\nMaths - වීජ ගණිතය")
-        return
+    content_payload = [system_prompt]
+    
+    # Image හෝ Audio ෆයිල් එකක් තියෙනවා නම් Prompt එකට එකතු කරනවා
+    if media_file:
+        file_ref = genai.upload_file(media_file)
+        content_payload.append(file_ref)
+        if media_type == "image":
+            content_payload.append("මේ පින්තූරය හොඳින් බලලා, Context එකේ තියෙන දැනුම පාවිච්චි කරලා ශිෂ්‍යයාට මේක පැහැදිලි කරන්න.")
+        elif media_type == "audio":
+            content_payload.append("මේ Audio එක අහලා, ශිෂ්‍යයා අහන ප්‍රශ්නයට Context එකෙන් උත්තර දෙන්න.")
 
-    if message_type == "text":
-        ai_reply = get_rag_response(user_message)
-        send_whatsapp_message(phone_number, ai_reply)
+    # User ගේ ප්‍රශ්නය අන්තිමට
+    content_payload.append(f"ශිෂ්‍යයාගේ ප්‍රශ්නය: {user_input}")
+
+    try:
+        response = model.generate_content(content_payload)
+        return response.text
+    except Exception as e:
+        return "පුතේ, මට පොඩි තාක්ෂණික ගැටලුවක් ආවා. ආයෙත් අහන්නකෝ."
+
+async def process_message(phone_number, message_body, message_type, media_id=None):
+    user_query = ""
+    media_path = None
+    retrieved_context = ""
+
+    # 1. Handle Voice / Audio
+    if message_type == "audio" and media_id:
+        print("🎙️ Processing Audio...")
+        media_url = whatsapp_utils.get_media_url(media_id)
+        media_path = whatsapp_utils.download_media(media_url, "ogg") # WhatsApp uses OGG
+        # Audio එකේ මොකක්ද තියෙන්නේ කියලා දන්නේ නැති නිසා Context එක ගන්න බෑ තාම.
+        # ඒක නිසා අපි කෙලින්ම Gemini ට යවනවා Audio එක + "Answer based on general knowledge first" 
+        # (Ideal method: Transcribe first, then search DB. But Gemini 1.5 handles audio directly well)
+        # හොඳම ක්‍රමය: ඉස්සෙල්ලා Audio එක Text කරන්න.
+        
+        audio_file = genai.upload_file(media_path)
+        transcription = model.generate_content([audio_file, "Transcribe this audio to Sinhala text exactly."]).text
+        print(f"🗣️ Transcribed: {transcription}")
+        user_query = transcription
+        
+    # 2. Handle Image
+    elif message_type == "image" and media_id:
+        print("🖼️ Processing Image...")
+        media_url = whatsapp_utils.get_media_url(media_id)
+        media_path = whatsapp_utils.download_media(media_url, "jpeg")
+        user_query = message_body if message_body else "මේ පින්තූරය විස්තර කරන්න."
+        
+        # පින්තූරයේ තියෙන්නේ මොකක්ද කියලා මුලින්ම බලමු (Context search කරන්න)
+        img_file = genai.upload_file(media_path)
+        img_desc = model.generate_content([img_file, "What is in this image? Describe in 2 sentences."]).text
+        print(f"🖼️ Image Concept: {img_desc}")
+        
+        # Image Concept එකෙන් පොතේ විස්තර හොයමු
+        retrieved_context = get_rag_context(img_desc)
+
+    # 3. Handle Text
+    else:
+        user_query = message_body
+        retrieved_context = get_rag_context(user_query)
+
+    # RAG නැතුව Audio ආවා නම් දැන් RAG කරන්න
+    if message_type == "audio":
+        retrieved_context = get_rag_context(user_query)
+
+    # Generate Final Answer
+    # Image එකක් නම් media_path යවනවා, නැත්නම් නිකන් Text
+    if message_type == "image":
+        ai_reply = generate_guru_response(user_query, retrieved_context, media_path, "image")
+    else:
+        # Audio එක Text කලානේ, ඒක දැන් Text message එකක් වගේමයි
+        ai_reply = generate_guru_response(user_query, retrieved_context)
+
+    # Clean up temp files
+    if media_path and os.path.exists(media_path):
+        os.remove(media_path)
+
+    # Send to WhatsApp
+    whatsapp_utils.send_whatsapp_message(phone_number, ai_reply)

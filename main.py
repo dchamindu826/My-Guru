@@ -6,54 +6,50 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI()
-
-# Meta Verification Token
-VERIFY_TOKEN = "my_guru_secret_token_2026" 
+VERIFY_TOKEN = "my_guru_secret_token_2026"
 
 @app.get("/")
 async def home():
-    return {"status": "Active", "message": "My Guru AI Server is Running!"}
+    return {"status": "Active", "mode": "My Guru Multimodal"}
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
-    """WhatsApp Webhook Verification"""
     verify_token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
-
     if verify_token == VERIFY_TOKEN:
         return int(challenge)
-    raise HTTPException(status_code=403, detail="Invalid verification token")
+    raise HTTPException(status_code=403, detail="Invalid token")
 
 @app.post("/webhook")
 async def receive_whatsapp_message(request: Request):
-    """Handle Incoming Messages (Text & Buttons)"""
     data = await request.json()
     
     try:
-        # Check if valid message
         if data.get("entry"):
             for entry in data["entry"]:
                 for change in entry["changes"]:
                     if change["value"].get("messages"):
                         msg = change["value"]["messages"][0]
                         phone_number = msg["from"]
+                        msg_type = msg["type"]
+
+                        print(f"📩 New Message Type: {msg_type}")
+
+                        if msg_type == "text":
+                            body = msg["text"]["body"]
+                            await ai_engine.process_message(phone_number, body, "text")
                         
-                        # 1. Handle Text Messages
-                        if msg["type"] == "text":
-                            user_message = msg["text"]["body"]
-                            await ai_engine.process_user_message(phone_number, user_message, "text")
+                        elif msg_type == "audio":
+                            media_id = msg["audio"]["id"]
+                            await ai_engine.process_message(phone_number, "", "audio", media_id)
                         
-                        # 2. Handle Button Clicks (Interactive)
-                        elif msg["type"] == "interactive":
-                            # Button ID එක ගන්න (උදා: lang_si, exam_ol)
-                            button_reply = msg["interactive"]["button_reply"]
-                            button_id = button_reply["id"] 
+                        elif msg_type == "image":
+                            media_id = msg["image"]["id"]
+                            caption = msg["image"].get("caption", "") # Caption එකත් ගන්නවා
+                            await ai_engine.process_message(phone_number, caption, "image", media_id)
                             
-                            # ID එක ai_engine එකට යවන්න
-                            await ai_engine.process_user_message(phone_number, button_id, "interactive")
-                        
     except Exception as e:
-        print(f"Error processing message: {e}")
+        print(f"❌ Error: {e}")
         pass
 
     return {"status": "received"}
