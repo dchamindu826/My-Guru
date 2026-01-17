@@ -82,13 +82,13 @@ def get_ai_response(user_input, language, subject, media_data=None, media_type=N
 async def home():
     return {"status": "Active", "message": "My Guru V2 is Ready!"}
 
-@app.get("/webhook")
+@app.get("/api/webhook")
 async def verify_webhook(request: Request):
     if request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
         return int(request.query_params.get("hub.challenge"))
     return {"status": "error"}
 
-@app.post("/webhook")
+@app.post("/api/webhook")
 async def handle_message(request: Request):
     data = await request.json()
     try:
