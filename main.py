@@ -1,7 +1,6 @@
 import os
 import io
-import traceback
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from supabase import create_client
 import google.generativeai as genai
 import whatsapp_utils
@@ -10,137 +9,113 @@ import PIL.Image
 
 load_dotenv()
 
-app = FastAPI(docs_url=None, redoc_url=None)
+app = FastAPI()
 
 # Configs
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-VERIFY_TOKEN = "myguru_secure_token_2026"
+VERIFY_TOKEN = "my_guru_secret_token_2026"
 
-# Print Config Status (Server එක Start වෙද්දී මේක වැටෙනවා)
-print("🚀 Server Starting...")
-print(f"🔌 Supabase URL: {SUPABASE_URL is not None}")
-print(f"🔑 Google Key: {GOOGLE_API_KEY is not None}")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+genai.configure(api_key=GOOGLE_API_KEY)
 
-try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    print("✅ Initialization Success!")
-except Exception as e:
-    print(f"❌ Initialization Error: {e}")
+# Images සහ Audio සඳහා Gemini 2.0 Flash සුපිරි
+model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- RAG FUNCTION ---
+# --- RAG FUNCTION (SMART) ---
 def get_ai_response(user_input, language, subject, media_data=None, media_type=None):
-    try:
-        print(f"🧠 AI Processing: {media_type} - {user_input}")
-        context_text = ""
-        prompt_parts = []
+    
+    context_text = ""
+    prompt_parts = []
+    
+    # 1. Text Query එකක් නම් Database එකෙන් Context එක ගන්නවා
+    if media_type == "text" and user_input:
+        embedding = genai.embed_content(
+            model="models/text-embedding-004",
+            content=user_input,
+            task_type="retrieval_query"
+        )['embedding']
+
+        # Subject එකට අදාලව ෆිල්ටර් කරලම ගන්නවා (Accuracy එකට)
+        response = supabase.rpc("match_documents", {
+            "query_embedding": embedding,
+            "match_threshold": 0.4,
+            "match_count": 4
+        }).execute()
         
-        if media_type == "text" and user_input:
-            embedding = genai.embed_content(
-                model="models/text-embedding-004",
-                content=user_input,
-                task_type="retrieval_query"
-            )['embedding']
+        context_text = "\n\n".join([doc['content'] for doc in response.data])
+        prompt_parts.append(f"CONTEXT FROM TEXTBOOK:\n{context_text}")
+        prompt_parts.append(f"USER QUESTION: {user_input}")
 
-            response = supabase.rpc("match_documents", {
-                "query_embedding": embedding,
-                "match_threshold": 0.4,
-                "match_count": 4
-            }).execute()
-            
-            if response.data:
-                context_text = "\n\n".join([doc['content'] for doc in response.data])
-                prompt_parts.append(f"CONTEXT FROM TEXTBOOK:\n{context_text}")
-                print(f"📚 Context Found: {len(response.data)} chunks")
-            else:
-                print("⚠️ No Context Found in DB")
-        
-            prompt_parts.append(f"USER QUESTION: {user_input}")
+    # 2. Image එකක් නම්
+    elif media_type == "image":
+        image = PIL.Image.open(io.BytesIO(media_data))
+        prompt_parts.append("Analyze this image given by the student.")
+        prompt_parts.append(image)
+        if user_input: prompt_parts.append(f"User Question about image: {user_input}")
 
-        elif media_type == "image":
-            image = PIL.Image.open(io.BytesIO(media_data))
-            prompt_parts.append("Analyze this image given by the student.")
-            prompt_parts.append(image)
-            if user_input: prompt_parts.append(f"User Question about image: {user_input}")
+    # 3. Audio එකක් නම්
+    elif media_type == "audio":
+        prompt_parts.append({"mime_type": "audio/ogg", "data": media_data})
+        prompt_parts.append("Listen to this student's question and answer it.")
 
-        elif media_type == "audio":
-            prompt_parts.append({"mime_type": "audio/ogg", "data": media_data})
-            prompt_parts.append("Listen to this student's question and answer it.")
+    # System Prompt එක
+    system_instruction = f"""
+    You are 'My Guru', a friendly AI teacher for Sri Lankan {subject} students.
+    Language Mode: {language}
+    
+    INSTRUCTIONS:
+    1. Answer accurately based on the Sri Lankan School Syllabus.
+    2. If context is provided, prioritize it.
+    3. If it's an image/voice, analyze it and give a helpful explanation.
+    4. Keep answers clear, encouraging, and simple.
+    """
+    
+    # Generate Content
+    # මෙතනදි අපි System Instruction එක මුලින් යවනවා
+    full_prompt = [system_instruction] + prompt_parts
+    ai_resp = model.generate_content(full_prompt)
+    return ai_resp.text
 
-        system_instruction = f"""
-        You are 'My Guru', a friendly AI teacher for Sri Lankan {subject} students.
-        Language Mode: {language}
-        INSTRUCTIONS:
-        1. Answer accurately based on the Sri Lankan School Syllabus.
-        2. Keep answers clear, encouraging, and simple.
-        """
-        
-        full_prompt = [system_instruction] + prompt_parts
-        ai_resp = model.generate_content(full_prompt)
-        print("🤖 AI Response Generated Successfully")
-        return ai_resp.text
-    except Exception as e:
-        print(f"❌ AI Error: {e}")
-        traceback.print_exc()
-        return "සමාවෙන්න, තාක්ෂණික දෝෂයක්. නැවත උත්සාහ කරන්න."
-
-# --- ROUTES ---
 @app.get("/")
 async def home():
     return {"status": "Active", "message": "My Guru V2 is Ready!"}
 
-@app.get("/api/webhook")
+@app.get("/webhook")
 async def verify_webhook(request: Request):
-    hub_mode = request.query_params.get("hub.mode")
-    hub_token = request.query_params.get("hub.verify_token")
-    hub_challenge = request.query_params.get("hub.challenge")
+    if request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
+        return int(request.query_params.get("hub.challenge"))
+    return {"status": "error"}
 
-    if hub_mode == "subscribe" and hub_token == VERIFY_TOKEN:
-        print("✅ WEBHOOK VERIFIED!")
-        return int(hub_challenge)
-    
-    print("❌ Webhook Verification Failed")
-    raise HTTPException(status_code=403, detail="Verification failed")
-
-@app.post("/api/webhook")
+@app.post("/webhook")
 async def handle_message(request: Request):
-    print("\n🔥 INCOMING WEBHOOK 🔥")
+    data = await request.json()
     try:
-        data = await request.json()
-        
-        if not data.get('entry'):
-            print("⚠️ Data has no entry")
-            return {"status": "ignored"}
-
         entry = data['entry'][0]['changes'][0]['value']
         
         if 'messages' in entry:
             msg = entry['messages'][0]
             phone = msg['from']
             msg_type = msg['type']
-            print(f"📩 Message from {phone} | Type: {msg_type}")
             
             # User Status Check
             user_data = supabase.table("users").select("*").eq("phone_number", phone).execute()
             
             if not user_data.data:
-                print("🆕 New User! Sending Language Buttons...")
+                # 1. New User -> Welcome & Language Button
                 supabase.table("users").insert({"phone_number": phone, "setup_stage": "new"}).execute()
                 whatsapp_utils.send_interactive_buttons(
                     phone, 
-                    "ආයුබෝවන්! මම My Guru. 🎓\nකරුණාකර භාෂාවක් තෝරන්න:",
+                    "ආයුබෝවන්! මම My Guru. 🎓\nඔයාගේ ඉගෙනුම් සහායකයා.\n\nකරුණාකර භාෂාවක් තෝරන්න:",
                     {"sin": "සිංහල", "eng": "English"}
                 )
                 return {"status": "ok"}
 
             user = user_data.data[0]
             stage = user['setup_stage']
-            print(f"👤 User Stage: {stage}")
-
-            # --- BUTTON / LIST HANDLING ---
+            
+            # --- INTERACTIVE BUTTON/LIST RESPONSES ---
             if msg_type == "interactive":
                 inter_type = msg['interactive']['type']
                 selection_id = ""
@@ -149,62 +124,79 @@ async def handle_message(request: Request):
                     selection_id = msg['interactive']['button_reply']['id']
                 elif inter_type == "list_reply":
                     selection_id = msg['interactive']['list_reply']['id']
-                
-                print(f"👉 Selection: {selection_id}")
 
+                # Stage 1: Language Selected -> Ask Exam
                 if stage == "new":
                     lang = "Sinhala" if selection_id == "sin" else "English"
                     supabase.table("users").update({"language": lang, "setup_stage": "language_set"}).eq("phone_number", phone).execute()
                     
-                    text_msg = "විභාගය මොකක්ද?" if lang == "Sinhala" else "Select Exam:"
-                    whatsapp_utils.send_interactive_buttons(phone, text_msg, {"ol": "O/L", "al": "A/L"})
+                    text_msg = "නියමයි! ඔයාගේ විභාගය මොකක්ද?" if lang == "Sinhala" else "Great! Select your Exam:"
+                    whatsapp_utils.send_interactive_buttons(phone, text_msg, {"ol": "O/L (සාමාන්‍ය පෙළ)", "al": "A/L (උසස් පෙළ)"})
 
+                # Stage 2: Exam Selected -> Ask Subject (LIST MESSAGE)
                 elif stage == "language_set":
                     exam = "O/L" if selection_id == "ol" else "A/L"
                     supabase.table("users").update({"exam_level": exam, "setup_stage": "exam_set"}).eq("phone_number", phone).execute()
                     
+                    # Subject List (O/L සඳහා උදාහරණ)
+                    # WhatsApp වල ලිස්ට් එකක උපරිම 10ක් පෙන්නන්න පුළුවන් එක පාර.
                     sections = [{
-                        "title": "Subjects",
+                        "title": "ප්‍රධාන විෂයන්",
                         "rows": [
-                            {"id": "sci", "title": "Science"},
-                            {"id": "math", "title": "Mathematics"},
+                            {"id": "sci", "title": "Science (විද්‍යාව)"},
+                            {"id": "math", "title": "Mathematics (ගණිතය)"},
+                            {"id": "sin", "title": "Sinhala (සිංහල)"},
+                            {"id": "eng", "title": "English (ඉංග්‍රීසි)"},
+                            {"id": "hist", "title": "History (ඉතිහාසය)"},
+                            {"id": "bud", "title": "Buddhism (බුද්ධාගම)"},
                             {"id": "tech", "title": "Elec. Technology"},
                             {"id": "ict", "title": "ICT"},
-                            {"id": "sin", "title": "Sinhala"}
+                            {"id": "comm", "title": "Commerce"},
+                            {"id": "art", "title": "Arts"}
                         ]
                     }]
-                    whatsapp_utils.send_interactive_list(phone, "විෂය තෝරන්න 👇", "List", sections)
+                    
+                    msg_text = "කරුණාකර ඔයාගේ විෂය තෝරන්න 👇"
+                    btn_text = "විෂයන් ලැයිස්තුව"
+                    whatsapp_utils.send_interactive_list(phone, msg_text, btn_text, sections)
 
+                # Stage 3: Subject Selected -> Ready
                 elif stage == "exam_set":
-                    # Simple Mapping
-                    subject = "General"
-                    if selection_id == "tech": subject = "Electrical Technology"
-                    elif selection_id == "sci": subject = "Science"
-                    elif selection_id == "math": subject = "Mathematics"
+                    # Title එක Database එකෙන් හොයාගන්න ඕන, දැනට ID එක දාමු
+                    subject_map = {"sci": "Science", "math": "Mathematics", "tech": "Electrical Technology"} # etc...
+                    subject = subject_map.get(selection_id, "General")
                     
                     supabase.table("users").update({"subject": subject, "setup_stage": "completed"}).eq("phone_number", phone).execute()
-                    whatsapp_utils.send_whatsapp_message(phone, f"{subject} පාඩම පටන් ගමු! ප්‍රශ්නයක් අහන්න.")
+                    
+                    welcome_txt = f"අපි {subject} ඉගෙන ගමු! 📚\nදැන් ඔයාට:\n✅ ප්‍රශ්න Type කරන්න\n✅ ගණන් වල ෆොටෝ එවන්න\n✅ Voice මැසේජ් එවන්න පුළුවන්."
+                    whatsapp_utils.send_whatsapp_message(phone, welcome_txt)
 
-            # --- Q&A HANDLING ---
+            # --- Q&A MODE (TEXT / IMAGE / AUDIO) ---
             elif stage == "completed":
+                
+                # 1. Text Message
                 if msg_type == "text":
                     user_query = msg['text']['body']
                     response = get_ai_response(user_query, user['language'], user['subject'], media_type="text")
                     whatsapp_utils.send_whatsapp_message(phone, response)
 
+                # 2. Image Message
                 elif msg_type == "image":
-                    print("🖼️ Processing Image...")
+                    whatsapp_utils.send_whatsapp_message(phone, "බලමින් පවතී... 🖼️")
                     image_id = msg['image']['id']
-                    caption = msg['image'].get('caption', "")
+                    caption = msg['image'].get('caption', "") # පින්තූරය එක්ක එවන වචන
+                    
                     media_url = whatsapp_utils.get_media_url(image_id)
                     if media_url:
                         media_data = whatsapp_utils.download_media_file(media_url)
                         response = get_ai_response(caption, user['language'], user['subject'], media_data=media_data, media_type="image")
                         whatsapp_utils.send_whatsapp_message(phone, response)
 
+                # 3. Audio Message (Voice Note)
                 elif msg_type == "audio":
-                    print("🎤 Processing Audio...")
+                    whatsapp_utils.send_whatsapp_message(phone, "අහමින් පවතී... 🎧")
                     audio_id = msg['audio']['id']
+                    
                     media_url = whatsapp_utils.get_media_url(audio_id)
                     if media_url:
                         media_data = whatsapp_utils.download_media_file(media_url)
@@ -212,9 +204,6 @@ async def handle_message(request: Request):
                         whatsapp_utils.send_whatsapp_message(phone, response)
 
     except Exception as e:
-        print("❌ CRITICAL ERROR IN MAIN LOOP:")
-        print(e)
-        traceback.print_exc() # මේකෙන් හරියටම පේනවා අවුල කොතනද කියලා
-        return {"status": "error", "message": str(e)}
+        print(f"Error: {e}")
 
     return {"status": "ok"}
