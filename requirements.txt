@@ -5,3 +5,6 @@ google-generativeai
 supabase
 python-dotenv
 pydantic
+Pillow
+google-generativeai
+flask
