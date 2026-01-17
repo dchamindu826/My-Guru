@@ -23,10 +23,13 @@ def send_whatsapp_message(to, body):
         "type": "text",
         "text": {"body": body},
     }
-    requests.post(url, headers=get_headers(), json=data)
+    response = requests.post(url, headers=get_headers(), json=data)
+    # Error Check
+    if response.status_code != 200:
+        print(f"❌ Error sending message: {response.text}")
 
 def send_interactive_buttons(to, text, buttons):
-    """Buttons 3ක් දක්වා යැවීමට (O/L vs A/L)"""
+    """Buttons 3ක් දක්වා යැවීමට"""
     url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
     
     button_list = []
@@ -46,7 +49,10 @@ def send_interactive_buttons(to, text, buttons):
             "action": {"buttons": button_list}
         }
     }
-    requests.post(url, headers=get_headers(), json=data)
+    response = requests.post(url, headers=get_headers(), json=data)
+    # Error Check
+    if response.status_code != 200:
+        print(f"❌ Error sending buttons: {response.text}")
 
 def send_interactive_list(to, text, button_text, sections):
     """දිග විෂයන් ලිස්ට් එකක් යැවීමට"""
@@ -66,8 +72,9 @@ def send_interactive_list(to, text, button_text, sections):
         }
     }
     response = requests.post(url, headers=get_headers(), json=data)
+    # Error Check
     if response.status_code != 200:
-        print(f"Error sending list: {response.text}")
+        print(f"❌ Error sending list: {response.text}")
 
 def get_media_url(media_id):
     """WhatsApp Media ID එකෙන් URL එක ගැනීම"""
@@ -75,11 +82,15 @@ def get_media_url(media_id):
     response = requests.get(url, headers=get_headers())
     if response.status_code == 200:
         return response.json().get('url')
-    return None
+    else:
+        print(f"❌ Error getting media URL: {response.text}")
+        return None
 
 def download_media_file(media_url):
     """URL එකෙන් Image/Audio ෆයිල් එක බාගැනීම"""
     response = requests.get(media_url, headers=get_headers())
     if response.status_code == 200:
         return response.content
-    return None
+    else:
+        print(f"❌ Error downloading media: {response.text}")
+        return None
