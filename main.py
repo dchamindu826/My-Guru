@@ -20,15 +20,14 @@ VERIFY_TOKEN = "myguru_secure_token_2026"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- RAG FUNCTION (RELAXED MODE) ---
 def get_ai_response(user_input, subject, media_data=None, media_type=None):
     try:
         context_text = ""
         prompt_parts = []
         
-        # 1. Database Search (RELAXED)
+        # 1. Database Search
         if media_type == "text" and user_input:
             embedding = genai.embed_content(
                 model="models/text-embedding-004",
@@ -36,25 +35,21 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
                 task_type="retrieval_query"
             )['embedding']
 
-            # Match Count එක 8ක් කළා (වැඩි විස්තර ගන්න)
-            # Threshold එක 0.25 ට අඩු කළා (වැඩිපුර දේවල් අහුවෙන්න)
             response = supabase.rpc("match_documents", {
                 "query_embedding": embedding,
-                "match_threshold": 0.25, 
-                "match_count": 8
+                "match_threshold": 0.30, 
+                "match_count": 5
             }).execute()
             
             if response.data:
                 context_text = "\n\n".join([doc['content'] for doc in response.data])
                 prompt_parts.append(f"BOOK CONTEXT:\n{context_text}")
             
-            # මෙතන "නැත්නම් එපා" කියන කෑල්ල අයින් කළා. 
-            # Context නැතත් සාමාන්‍ය දැනුමෙන් හරි උදව්වක් දෙන්න පුළුවන් වෙන්න.
             prompt_parts.append(f"STUDENT QUESTION: {user_input}")
 
         elif media_type == "image":
             image = PIL.Image.open(io.BytesIO(media_data))
-            prompt_parts.append("Analyze this textbook image.")
+            prompt_parts.append("Analyze this textbook image and match it with the context.")
             prompt_parts.append(image)
             if user_input: prompt_parts.append(f"Question: {user_input}")
 
@@ -62,17 +57,32 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
             prompt_parts.append({"mime_type": "audio/ogg", "data": media_data})
             prompt_parts.append("Answer this voice question.")
 
-        # --- SYSTEM PROMPT (FRIENDLY & DETAILED) ---
+        # --- SYSTEM PROMPT (LASSANA FORMATTING) ---
         system_instruction = f"""
-        You are 'My Guru', a helpful Sri Lankan teacher for {subject}.
+        You are 'My Guru', a friendly Sri Lankan teacher.
         
-        INSTRUCTIONS:
-        1. Use the 'BOOK CONTEXT' to answer.
-        2. **Explain things clearly.** Do NOT give one-word answers. Give details.
-        3. If the context has the answer, explain it well in Sinhala.
-        4. If the context is missing info, try to give a helpful general answer related to {subject}, but mention "මේ ගැන පොතේ වැඩි විස්තර නෑ, නමුත් සාමාන්‍යයෙන්..."
-        5. Be encouraging and friendly.
-        6. Language: Sinhala.
+        RULES FOR CONTENT:
+        1. Use ONLY the provided 'BOOK CONTEXT'. Do not invent answers.
+        2. Explain clearly in Sinhala.
+        
+        RULES FOR FORMATTING (Make it beautiful for WhatsApp):
+        1. **DO NOT use asterisks (**)** for bolding words. It looks messy.
+        2. Use **Emojis** to highlight points (e.g., 📌, ✅, 🏐, 🔸).
+        3. Break text into **small paragraphs**. Leave an empty line between paragraphs.
+        4. Use numbered lists (1️⃣, 2️⃣) or bullet points (🔹) for steps.
+        5. Keep the tone encouraging and easy to read.
+        
+        Example Format:
+        "හරි පුතේ, ඔයා අහපු ප්‍රශ්නයට උත්තරේ මේකයි. 👇
+        
+        🏐 **වොලිබෝල් ක්‍රීඩාවේ ප්‍රහාරය**
+        
+        මේකෙදි වැදගත් කරුණු කිහිපයක් තියෙනවා:
+        
+        🔹 පන්දුවට පහර දෙන්න ඕන දැලට උඩින්.
+        🔹 වේගයෙන් ප්‍රතිවාදී පිලට යවන්න ඕන.
+        
+        තව ප්‍රශ්න තියෙනවා නම් අහන්න! 😊"
         """
         
         full_prompt = [system_instruction] + prompt_parts
@@ -82,7 +92,7 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
 
     except Exception as e:
         print(f"❌ AI Error: {e}")
-        return "පොඩි අවුලක් වුනා. ආයේ අහන්නකෝ."
+        return "පොඩි ගැටළුවක් පුතේ. ආයේ අහන්නකෝ."
 
 # --- WEBHOOK ROUTES ---
 @app.get("/api/webhook")
@@ -90,7 +100,6 @@ async def verify_webhook(request: Request):
     hub_mode = request.query_params.get("hub.mode")
     hub_token = request.query_params.get("hub.verify_token")
     hub_challenge = request.query_params.get("hub.challenge")
-
     if hub_mode == "subscribe" and hub_token == VERIFY_TOKEN:
         return int(hub_challenge)
     raise HTTPException(status_code=403, detail="Verification failed")
@@ -121,7 +130,7 @@ async def handle_message(request: Request):
                 if msg_type == "interactive":
                     if msg['interactive']['button_reply']['id'] == "ol":
                         supabase.table("users").update({"exam_level": "O/L", "setup_stage": "subject_select"}).eq("phone_number", phone).execute()
-                        whatsapp_utils.send_whatsapp_message(phone, "O/L විෂයක් තෝරන්න අංකය එවන්න 👇\n\n1️⃣ සෞඛ්‍යය (Health)\n2️⃣ විද්‍යාව (Science)")
+                        whatsapp_utils.send_whatsapp_message(phone, "O/L විෂයක් තෝරන්න 👇\n\n1️⃣ සෞඛ්‍යය (Health)\n2️⃣ විද්‍යාව (Science)")
             
             elif stage == "subject_select":
                 if msg_type == "text" and msg['text']['body'].strip() == "1":
