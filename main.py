@@ -22,7 +22,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-2.0-flash')
 
-# --- RAG FUNCTION (FORMATTING UPDATED 💅) ---
+# --- RAG FUNCTION (COMPLETENESS UPDATE 🚀) ---
 def get_ai_response(user_input, subject, media_data=None, media_type=None):
     try:
         context_text = ""
@@ -38,10 +38,11 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
                 task_type="retrieval_query"
             )['embedding']
 
+            # 🔥 CHANGE 1: match_count එක 10 කළා (වැඩි විස්තර අහු වෙන්න)
             response = supabase.rpc("match_documents", {
                 "query_embedding": embedding,
                 "match_threshold": 0.25, 
-                "match_count": 8
+                "match_count": 10 
             }).execute()
             
             if response.data:
@@ -66,10 +67,11 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
                 task_type="retrieval_query"
             )['embedding']
 
+            # 🔥 CHANGE: Images වලටත් Count එක 8 කළා
             response = supabase.rpc("match_documents", {
                 "query_embedding": embedding,
                 "match_threshold": 0.25,
-                "match_count": 5
+                "match_count": 8 
             }).execute()
 
             if response.data:
@@ -94,10 +96,11 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
                 task_type="retrieval_query"
             )['embedding']
 
+            # 🔥 CHANGE: Audio වලටත් Count එක 10 කළා
             response = supabase.rpc("match_documents", {
                 "query_embedding": embedding,
                 "match_threshold": 0.25,
-                "match_count": 8
+                "match_count": 10
             }).execute()
 
             if response.data:
@@ -107,32 +110,32 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
             prompt_parts.append(f"STUDENT VOICE QUESTION (Transcribed): {audio_text}")
             prompt_parts.append("Answer this question using the BOOK CONTEXT.")
 
-        # --- SYSTEM PROMPT (LASSANA FORMATTING ✨) ---
+        # --- SYSTEM PROMPT (STRICT COMPLETENESS RULE ADDED 📝) ---
         system_instruction = f"""
-        You are 'My Guru', a friendly and engaging Sri Lankan teacher for {subject}.
+        You are 'My Guru', a friendly Sri Lankan teacher for {subject}.
         
         INSTRUCTIONS:
-        1. **Content:** Answer primarily based on the 'BOOK CONTEXT'.
-        2. **Language:** Sinhala.
+        1. **Content:** Answer based on 'BOOK CONTEXT'.
+        2. **COMPLETENESS (IMPORTANT):** If the context contains a list of items (e.g., 6 techniques, 5 types), you MUST list ALL of them. Do not summarize or pick only a few.
+        3. **Language:** Sinhala.
         
-        FORMATTING RULES (Make it readable & fun!):
-        1. **Use Emojis:** Use relevant emojis (e.g., 📚, ✅, 📌, 🏐, 💡) to make the text lively.
-        2. **Bullet Points:** Use symbols like 🔹, 🔸, or ▫️ for lists. Avoid plain dashes.
-        3. **Spacing:** Keep paragraphs **short**. MUST leave an empty line between paragraphs.
-        4. **Conciseness:** Give a **simple and direct** answer first. Do not write long essays.
-        5. **Tone:** Warm, encouraging, and helpful (e.g., "හරි පුතේ...", "වැදගත් කරුණක් තමයි...").
+        FORMATTING RULES:
+        1. **Use Emojis:** (e.g., 📚, ✅, 📌, 🏐).
+        2. **Bullet Points:** Use 🔹 or ▫️ for lists.
+        3. **Spacing:** Leave an empty line between paragraphs.
+        4. **Tone:** Encouraging.
 
         EXAMPLE OUTPUT:
-        "හරි පුතේ, ඔයා අහපු දේ ගැන පොතේ තියෙන්නේ මෙහෙමයි. 👇
+        "හරි පුතේ, වොලිබෝල් ක්‍රීඩාවේ මූලික දක්ෂතා (ශිල්පීය ක්‍රම) 6ක් තියෙනවා: 👇
 
-        🏐 *වොලිබෝල් ක්‍රීඩාවේ ප්‍රහාරය*
+        🔹 පන්දුව පිරිනැමීම (Serving)
+        🔹 පන්දුව ලබා ගැනීම (Receiving)
+        🔹 පන්දුව එසවීම (Setting)
+        🔹 ප්‍රහාරය (Spiking)
+        🔹 වැළැක්වීම (Blocking)
+        🔹 පිටිය රැකීම (Court Defending)
 
-        මේකෙදි වැදගත් කරුණු කිහිපයක් තියෙනවා:
-
-        🔹 පන්දුවට පහර දෙන්න ඕන දැලට උඩින්.
-        🔹 වේගයෙන් ප්‍රතිවාදී පිලට යවන්න ඕන.
-
-        තව විස්තර දැනගන්න ඕන නම් අහන්න! 😊"
+        මේවා ගැන වැඩි විස්තර ඕන නම් අහන්න! 😊"
         """
         
         full_prompt = [system_instruction] + prompt_parts
