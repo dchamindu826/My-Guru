@@ -20,14 +20,18 @@ VERIFY_TOKEN = "myguru_secure_token_2026"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
+
+# Gemini 2.0 Flash (Images සඳහා හොඳම මොඩල් එක)
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 def get_ai_response(user_input, subject, media_data=None, media_type=None):
     try:
         context_text = ""
         prompt_parts = []
         
-        # 1. Database Search
+        # ---------------------------------------------------------
+        # SCENARIO 1: TEXT MESSAGE (User types a question)
+        # ---------------------------------------------------------
         if media_type == "text" and user_input:
             embedding = genai.embed_content(
                 model="models/text-embedding-004",
@@ -47,42 +51,59 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
             
             prompt_parts.append(f"STUDENT QUESTION: {user_input}")
 
+        # ---------------------------------------------------------
+        # SCENARIO 2: IMAGE MESSAGE (User sends a photo) - NEW UPDATE 🚀
+        # ---------------------------------------------------------
         elif media_type == "image":
             image = PIL.Image.open(io.BytesIO(media_data))
-            prompt_parts.append("Analyze this textbook image and match it with the context.")
-            prompt_parts.append(image)
-            if user_input: prompt_parts.append(f"Question: {user_input}")
+            
+            # 1. මුලින්ම Image එකේ තියෙන්නේ මොකක්ද කියලා Gemini ගෙන් අහනවා
+            # (මේකෙන් ලැබෙන විස්තරය අපි Database එකේ Search කරන්න ගන්නවා)
+            vision_prompt = "Describe this image in detail in Sinhala and English. Focus on sports actions, diagrams, or text visible."
+            vision_response = model.generate_content([vision_prompt, image])
+            image_description = vision_response.text
+            
+            print(f"🖼️ Image Analysis: {image_description}") # Log එකේ බලාගන්න
 
+            # 2. දැන් ඒ විස්තරය පාවිච්චි කරලා Database එකේ Search කරනවා
+            embedding = genai.embed_content(
+                model="models/text-embedding-004",
+                content=image_description, # රූපයේ විස්තරය Search Query එකක් ලෙස
+                task_type="retrieval_query"
+            )['embedding']
+
+            response = supabase.rpc("match_documents", {
+                "query_embedding": embedding,
+                "match_threshold": 0.30,
+                "match_count": 5
+            }).execute()
+
+            if response.data:
+                context_text = "\n\n".join([doc['content'] for doc in response.data])
+                prompt_parts.append(f"RELATED BOOK CONTEXT:\n{context_text}")
+
+            prompt_parts.append("INSTRUCTION: The student sent this image. Use the 'BOOK CONTEXT' to explain what is in the image according to the syllabus.")
+            prompt_parts.append(image)
+            if user_input: prompt_parts.append(f"Student's Caption: {user_input}")
+
+        # ---------------------------------------------------------
+        # SCENARIO 3: AUDIO MESSAGE
+        # ---------------------------------------------------------
         elif media_type == "audio":
             prompt_parts.append({"mime_type": "audio/ogg", "data": media_data})
-            prompt_parts.append("Answer this voice question.")
+            prompt_parts.append("Answer this voice question using the provided context if possible.")
 
-        # --- SYSTEM PROMPT (LASSANA FORMATTING) ---
+        # --- SYSTEM PROMPT (FORMATTING & TONE) ---
         system_instruction = f"""
         You are 'My Guru', a friendly Sri Lankan teacher.
         
-        RULES FOR CONTENT:
-        1. Use ONLY the provided 'BOOK CONTEXT'. Do not invent answers.
-        2. Explain clearly in Sinhala.
-        
-        RULES FOR FORMATTING (Make it beautiful for WhatsApp):
-        1. **DO NOT use asterisks (**)** for bolding words. It looks messy.
-        2. Use **Emojis** to highlight points (e.g., 📌, ✅, 🏐, 🔸).
-        3. Break text into **small paragraphs**. Leave an empty line between paragraphs.
-        4. Use numbered lists (1️⃣, 2️⃣) or bullet points (🔹) for steps.
-        5. Keep the tone encouraging and easy to read.
-        
-        Example Format:
-        "හරි පුතේ, ඔයා අහපු ප්‍රශ්නයට උත්තරේ මේකයි. 👇
-        
-        🏐 **වොලිබෝල් ක්‍රීඩාවේ ප්‍රහාරය**
-        
-        මේකෙදි වැදගත් කරුණු කිහිපයක් තියෙනවා:
-        
-        🔹 පන්දුවට පහර දෙන්න ඕන දැලට උඩින්.
-        🔹 වේගයෙන් ප්‍රතිවාදී පිලට යවන්න ඕන.
-        
-        තව ප්‍රශ්න තියෙනවා නම් අහන්න! 😊"
+        RULES:
+        1. **SOURCE OF TRUTH:** Always answer based on the provided 'BOOK CONTEXT'.
+        2. **IMAGES:** If the user sends an image, look at the 'BOOK CONTEXT' to find the matching lesson/diagram and explain it.
+        3. **FORMATTING:** - Do NOT use asterisks (**).
+           - Use Emojis (📌, ✅, 🏐).
+           - Separate paragraphs with empty lines.
+           - Be clear and simple in Sinhala.
         """
         
         full_prompt = [system_instruction] + prompt_parts
@@ -142,10 +163,12 @@ async def handle_message(request: Request):
                     response = get_ai_response(msg['text']['body'], user['subject'], media_type="text")
                     whatsapp_utils.send_whatsapp_message(phone, response)
                 elif msg_type == "image":
+                    # Image Handling Update
                     media_url = whatsapp_utils.get_media_url(msg['image']['id'])
                     if media_url:
                         media_data = whatsapp_utils.download_media_file(media_url)
-                        response = get_ai_response(msg['image'].get('caption', ""), user['subject'], media_data=media_data, media_type="image")
+                        caption = msg['image'].get('caption', "")
+                        response = get_ai_response(caption, user['subject'], media_data=media_data, media_type="image")
                         whatsapp_utils.send_whatsapp_message(phone, response)
                 elif msg_type == "audio":
                     media_url = whatsapp_utils.get_media_url(msg['audio']['id'])
