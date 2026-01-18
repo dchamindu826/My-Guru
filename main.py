@@ -22,7 +22,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-2.0-flash')
 
-# --- RAG FUNCTION (UPDATED FOR AUDIO SEARCH) ---
+# --- RAG FUNCTION (FORMATTING UPDATED 💅) ---
 def get_ai_response(user_input, subject, media_data=None, media_type=None):
     try:
         context_text = ""
@@ -32,14 +32,12 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
         # SCENARIO 1: TEXT MESSAGE
         # ---------------------------------------------------------
         if media_type == "text" and user_input:
-            # 1. Embed Query
             embedding = genai.embed_content(
                 model="models/text-embedding-004",
                 content=user_input,
                 task_type="retrieval_query"
             )['embedding']
 
-            # 2. Search DB
             response = supabase.rpc("match_documents", {
                 "query_embedding": embedding,
                 "match_threshold": 0.25, 
@@ -58,12 +56,10 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
         elif media_type == "image":
             image = PIL.Image.open(io.BytesIO(media_data))
             
-            # Step A: Describe Image
             vision_prompt = "Describe this image in detail (Sinhala/English). Focus on diagrams/text."
             vision_response = model.generate_content([vision_prompt, image])
             img_desc = vision_response.text
 
-            # Step B: Search DB with Description
             embedding = genai.embed_content(
                 model="models/text-embedding-004",
                 content=img_desc,
@@ -85,19 +81,13 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
             if user_input: prompt_parts.append(f"Question: {user_input}")
 
         # ---------------------------------------------------------
-        # SCENARIO 3: AUDIO MESSAGE (NEW UPDATE 🚀)
+        # SCENARIO 3: AUDIO MESSAGE
         # ---------------------------------------------------------
         elif media_type == "audio":
-            # Step A: Transcribe Audio (Get Text)
-            # අපි Gemini ට කියනවා මුලින්ම මේකේ තියෙන දේ අහලා Text එක දෙන්න කියලා
             audio_prompt = "Listen to this audio and write down EXACTLY what the student is asking in Sinhala/English."
             audio_resp = model.generate_content([audio_prompt, {"mime_type": "audio/ogg", "data": media_data}])
             audio_text = audio_resp.text
             
-            print(f"🎤 Audio Transcript: {audio_text}") # Log එකේ බලන්න
-
-            # Step B: Search DB with Transcribed Text
-            # දැන් අපි අර Text එක පාවිච්චි කරලා Database එකේ හොයනවා
             embedding = genai.embed_content(
                 model="models/text-embedding-004",
                 content=audio_text,
@@ -117,17 +107,32 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
             prompt_parts.append(f"STUDENT VOICE QUESTION (Transcribed): {audio_text}")
             prompt_parts.append("Answer this question using the BOOK CONTEXT.")
 
-        # --- SYSTEM PROMPT ---
+        # --- SYSTEM PROMPT (LASSANA FORMATTING ✨) ---
         system_instruction = f"""
-        You are 'My Guru', a helpful Sri Lankan teacher for {subject}.
+        You are 'My Guru', a friendly and engaging Sri Lankan teacher for {subject}.
         
         INSTRUCTIONS:
-        1. Use the 'BOOK CONTEXT' to answer.
-        2. **Explain things clearly.** Do NOT give one-word answers. Give details.
-        3. If the context has the answer, explain it well in Sinhala.
-        4. If the context is missing info, try to give a helpful general answer related to {subject}, but mention "මේ ගැන පොතේ වැඩි විස්තර නෑ, නමුත් සාමාන්‍යයෙන්..."
-        5. Be encouraging and friendly.
-        6. Language: Sinhala.
+        1. **Content:** Answer primarily based on the 'BOOK CONTEXT'.
+        2. **Language:** Sinhala.
+        
+        FORMATTING RULES (Make it readable & fun!):
+        1. **Use Emojis:** Use relevant emojis (e.g., 📚, ✅, 📌, 🏐, 💡) to make the text lively.
+        2. **Bullet Points:** Use symbols like 🔹, 🔸, or ▫️ for lists. Avoid plain dashes.
+        3. **Spacing:** Keep paragraphs **short**. MUST leave an empty line between paragraphs.
+        4. **Conciseness:** Give a **simple and direct** answer first. Do not write long essays.
+        5. **Tone:** Warm, encouraging, and helpful (e.g., "හරි පුතේ...", "වැදගත් කරුණක් තමයි...").
+
+        EXAMPLE OUTPUT:
+        "හරි පුතේ, ඔයා අහපු දේ ගැන පොතේ තියෙන්නේ මෙහෙමයි. 👇
+
+        🏐 *වොලිබෝල් ක්‍රීඩාවේ ප්‍රහාරය*
+
+        මේකෙදි වැදගත් කරුණු කිහිපයක් තියෙනවා:
+
+        🔹 පන්දුවට පහර දෙන්න ඕන දැලට උඩින්.
+        🔹 වේගයෙන් ප්‍රතිවාදී පිලට යවන්න ඕන.
+
+        තව විස්තර දැනගන්න ඕන නම් අහන්න! 😊"
         """
         
         full_prompt = [system_instruction] + prompt_parts
@@ -137,7 +142,7 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
 
     except Exception as e:
         print(f"❌ AI Error: {e}")
-        return "පොඩි අවුලක් වුනා. ආයේ අහන්නකෝ."
+        return "පොඩි ගැටළුවක් පුතේ. ආයේ අහන්නකෝ."
 
 # --- WEBHOOK ROUTES ---
 @app.get("/api/webhook")
