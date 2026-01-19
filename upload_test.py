@@ -42,17 +42,30 @@ def get_embedding_with_retry(text, retries=3):
             time.sleep(5)
     return None
 
-def process_pdf(pdf_path):
+def process_pdf(pdf_path, start_page, end_page):
     doc = fitz.open(pdf_path)
-    print(f"📘 Processing PDF: {pdf_path} ({len(doc)} Pages)\n")
+    print(f"📘 Processing PDF: {pdf_path}")
+    print(f"📄 Total Pages: {len(doc)}")
+    print(f"🎯 Selected Range: Page {start_page} to {end_page}\n")
 
     for page_num, page in enumerate(doc):
+        current_page = page_num + 1  # PDF පිටු අංකය
+
+        # --- PAGE RANGE LOGIC ---
+        if current_page < start_page:
+            continue
+        
+        if current_page > end_page:
+            print(f"🛑 Reached End Page ({end_page}). Stopping.")
+            break
+        # ------------------------
+
         retries = 3
         success = False
         
         while retries > 0 and not success:
             try:
-                print(f"🔄 Processing Page {page_num + 1}...")
+                print(f"🔄 Processing Page {current_page}...")
                 
                 # Image Capture
                 pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
@@ -76,14 +89,14 @@ def process_pdf(pdf_path):
                 text_content = response.text.strip()
 
                 if not text_content or len(text_content) < 20:
-                    print(f"⚠️ Page {page_num + 1} seems empty. Skipped.")
+                    print(f"⚠️ Page {current_page} seems empty. Skipped.")
                     break
 
-                # --- FULL PREVIEW (මුළු පිටුවම පෙන්වන්න) ---
+                # --- FULL PREVIEW ---
                 print("\n" + "="*60)
-                print(f"📄 PAGE {page_num + 1} CONTENT:")
+                print(f"📄 PAGE {current_page} CONTENT:")
                 print("="*60)
-                print(text_content)  # දැන් මුළු පිටුවම පේනවා
+                print(text_content) 
                 print("="*60 + "\n")
 
                 # Database Upload
@@ -93,17 +106,20 @@ def process_pdf(pdf_path):
                     data = {
                         "content": text_content,
                         "embedding": vector,
-                        "metadata": {"source": "Grade 10 Health", "page": page_num + 1}
+                        "metadata": {
+                            "source": "Grade 10 Science", # ⚠️ 1. මෙතන නම වෙනස් කළා
+                            "page": current_page
+                        }
                     }
                     supabase.table('documents').insert(data).execute()
-                    print(f"✅ Page {page_num + 1} Uploaded Successfully!\n")
+                    print(f"✅ Page {current_page} Uploaded Successfully!\n")
                     success = True
                 else:
-                    print(f"❌ Embedding Failed for Page {page_num + 1}")
+                    print(f"❌ Embedding Failed for Page {current_page}")
                     break
 
             except Exception as e:
-                print(f"❌ Error on Page {page_num + 1}: {e}")
+                print(f"❌ Error on Page {current_page}: {e}")
                 print("⏳ Retrying in 5 seconds...")
                 time.sleep(5)
                 retries -= 1
@@ -111,13 +127,23 @@ def process_pdf(pdf_path):
         time.sleep(2)
 
 def main():
-    pdf_file = "knowledge/Untitled design.pdf"
+    # ⚠️ 2. මෙතන ඔයාගේ අලුත් පොතේ නම දෙන්න
+    pdf_file = "knowledge/History 10.pdf"
+    
+    # ⚠️ 3. පිටු ගාණ හදාගන්න (මුල ඉඳන් යනවා නම් 1 දෙන්න)
+    START_PAGE = 95
+    END_PAGE = 148
+
     if os.path.exists(pdf_file):
-        clear_database()
-        process_pdf(pdf_file)
-        print("\n🎉 All Pages Uploaded Successfully!")
+        
+        # ⚠️ 4. මෙන්න මේ පේළිය ඉස්සරහට # දැම්මා. (පරණ ඩේටා මැකෙන්නේ නෑ)
+        # clear_database() 
+        
+        print(f"🚀 Starting Append Mode for {pdf_file}...")
+        process_pdf(pdf_file, START_PAGE, END_PAGE)
+        print("\n🎉 New Book Uploaded Successfully!")
     else:
-        print("❌ PDF File not found!")
+        print(f"❌ PDF File not found at: {pdf_file}")
 
 if __name__ == "__main__":
     main()

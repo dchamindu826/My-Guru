@@ -22,7 +22,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-2.0-flash')
 
-# --- RAG FUNCTION (COMPLETENESS UPDATE 🚀) ---
+# --- RAG FUNCTION (UPDATED PROMPT FOR TONE) ---
 def get_ai_response(user_input, subject, media_data=None, media_type=None):
     try:
         context_text = ""
@@ -38,11 +38,10 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
                 task_type="retrieval_query"
             )['embedding']
 
-            # 🔥 CHANGE 1: match_count එක 10 කළා (වැඩි විස්තර අහු වෙන්න)
             response = supabase.rpc("match_documents", {
                 "query_embedding": embedding,
                 "match_threshold": 0.25, 
-                "match_count": 10 
+                "match_count": 10
             }).execute()
             
             if response.data:
@@ -67,11 +66,10 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
                 task_type="retrieval_query"
             )['embedding']
 
-            # 🔥 CHANGE: Images වලටත් Count එක 8 කළා
             response = supabase.rpc("match_documents", {
                 "query_embedding": embedding,
                 "match_threshold": 0.25,
-                "match_count": 8 
+                "match_count": 8
             }).execute()
 
             if response.data:
@@ -96,7 +94,6 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
                 task_type="retrieval_query"
             )['embedding']
 
-            # 🔥 CHANGE: Audio වලටත් Count එක 10 කළා
             response = supabase.rpc("match_documents", {
                 "query_embedding": embedding,
                 "match_threshold": 0.25,
@@ -110,32 +107,23 @@ def get_ai_response(user_input, subject, media_data=None, media_type=None):
             prompt_parts.append(f"STUDENT VOICE QUESTION (Transcribed): {audio_text}")
             prompt_parts.append("Answer this question using the BOOK CONTEXT.")
 
-        # --- SYSTEM PROMPT (STRICT COMPLETENESS RULE ADDED 📝) ---
+        # --- SYSTEM PROMPT (TONE UPDATE: Puthe NOT Machan) ---
         system_instruction = f"""
-        You are 'My Guru', a friendly Sri Lankan teacher for {subject}.
+        You are 'My Guru', a friendly and wise Sri Lankan teacher for {subject}.
         
         INSTRUCTIONS:
         1. **Content:** Answer based on 'BOOK CONTEXT'.
-        2. **COMPLETENESS (IMPORTANT):** If the context contains a list of items (e.g., 6 techniques, 5 types), you MUST list ALL of them. Do not summarize or pick only a few.
+        2. **Completeness:** If there's a list, give ALL items.
         3. **Language:** Sinhala.
         
-        FORMATTING RULES:
-        1. **Use Emojis:** (e.g., 📚, ✅, 📌, 🏐).
-        2. **Bullet Points:** Use 🔹 or ▫️ for lists.
-        3. **Spacing:** Leave an empty line between paragraphs.
-        4. **Tone:** Encouraging.
+        TONE RULES (VERY IMPORTANT):
+        1. **Address the student as 'Puthe' (පුතේ).** 2. **NEVER use words like 'Machan', 'Yaluwa', 'Macho'.** You are a Teacher.
+        3. Be kind, encouraging, and respectful.
 
-        EXAMPLE OUTPUT:
-        "හරි පුතේ, වොලිබෝල් ක්‍රීඩාවේ මූලික දක්ෂතා (ශිල්පීය ක්‍රම) 6ක් තියෙනවා: 👇
-
-        🔹 පන්දුව පිරිනැමීම (Serving)
-        🔹 පන්දුව ලබා ගැනීම (Receiving)
-        🔹 පන්දුව එසවීම (Setting)
-        🔹 ප්‍රහාරය (Spiking)
-        🔹 වැළැක්වීම (Blocking)
-        🔹 පිටිය රැකීම (Court Defending)
-
-        මේවා ගැන වැඩි විස්තර ඕන නම් අහන්න! 😊"
+        FORMATTING:
+        - Use Emojis (📚, ✅, 🏐).
+        - Use Bullet Points (🔹).
+        - Leave empty lines between paragraphs.
         """
         
         full_prompt = [system_instruction] + prompt_parts
@@ -174,39 +162,67 @@ async def handle_message(request: Request):
             
             if not user_data.data:
                 supabase.table("users").insert({"phone_number": phone, "setup_stage": "exam_select"}).execute()
-                whatsapp_utils.send_interactive_buttons(phone, "කොහොමද පුතේ? 😊\nවිභාගය තෝරන්න:", {"ol": "O/L", "al": "A/L"})
+                whatsapp_utils.send_interactive_buttons(phone, "ආයුබෝවන් පුතේ! 😊\nවිභාගය තෝරන්න:", {"ol": "O/L", "al": "A/L"})
                 return {"status": "ok"}
 
             user = user_data.data[0]
             stage = user['setup_stage']
 
-            if stage == "exam_select":
-                if msg_type == "interactive":
-                    if msg['interactive']['button_reply']['id'] == "ol":
+            # --- INTERACTIVE BUTTON HANDLING (MENU & FEEDBACK) ---
+            if msg_type == "interactive":
+                btn_id = msg['interactive']['button_reply']['id']
+
+                # 1. Exam Selection
+                if stage == "exam_select":
+                    if btn_id == "ol":
                         supabase.table("users").update({"exam_level": "O/L", "setup_stage": "subject_select"}).eq("phone_number", phone).execute()
                         whatsapp_utils.send_whatsapp_message(phone, "O/L විෂයක් තෝරන්න අංකය එවන්න 👇\n\n1️⃣ සෞඛ්‍යය (Health)\n2️⃣ විද්‍යාව (Science)")
+                
+                # 2. Feedback Handling (NEW)
+                elif stage == "completed":
+                    if btn_id == "fb_yes":
+                        whatsapp_utils.send_whatsapp_message(phone, "ගොඩක් සතුටුයි පුතේ! දිගටම ඉගෙන ගමු. 📚✨")
+                    elif btn_id == "fb_no":
+                        whatsapp_utils.send_whatsapp_message(phone, "අයියෝ! සමාවෙන්න පුතේ. 😔\nප්‍රශ්නය තව ටිකක් පැහැදිලිව අහන්නකෝ, මම උත්සාහ කරන්නම්.")
             
+            # --- SUBJECT SELECTION ---
             elif stage == "subject_select":
                 if msg_type == "text" and msg['text']['body'].strip() == "1":
                     supabase.table("users").update({"subject": "Health Science", "setup_stage": "completed"}).eq("phone_number", phone).execute()
-                    whatsapp_utils.send_whatsapp_message(phone, "හරි! දැන් සෞඛ්‍යය ගැන ඕන දෙයක් අහන්න. 📚")
+                    whatsapp_utils.send_whatsapp_message(phone, "හරි පුතේ! දැන් සෞඛ්‍යය පාඩම ගැන ඕන දෙයක් අහන්න. 📚\n(වෙන විෂයකට යන්න ඕන නම් 'Menu' කියලා එවන්න)")
 
+            # --- Q&A MODE ---
             elif stage == "completed":
+                
+                # 1. MENU / RESET COMMAND (NEW FEATURE)
+                if msg_type == "text":
+                    text_body = msg['text']['body'].strip().lower()
+                    if text_body in ["menu", "list", "change", "මුලට", "විෂයන්", "subject","wenath"]:
+                        supabase.table("users").update({"setup_stage": "exam_select"}).eq("phone_number", phone).execute()
+                        whatsapp_utils.send_interactive_buttons(phone, "මුලට පැමිණියා. විභාගය තෝරන්න පුතේ: 👇", {"ol": "O/L", "al": "A/L"})
+                        return {"status": "ok"}
+
+                # 2. AI PROCESSING
+                response = None
                 if msg_type == "text":
                     response = get_ai_response(msg['text']['body'], user['subject'], media_type="text")
-                    whatsapp_utils.send_whatsapp_message(phone, response)
                 elif msg_type == "image":
                     media_url = whatsapp_utils.get_media_url(msg['image']['id'])
                     if media_url:
                         media_data = whatsapp_utils.download_media_file(media_url)
-                        response = get_ai_response(msg['image'].get('caption', ""), user['subject'], media_data=media_data, media_type="image")
-                        whatsapp_utils.send_whatsapp_message(phone, response)
+                        caption = msg['image'].get('caption', "")
+                        response = get_ai_response(caption, user['subject'], media_data=media_data, media_type="image")
                 elif msg_type == "audio":
                     media_url = whatsapp_utils.get_media_url(msg['audio']['id'])
                     if media_url:
                         media_data = whatsapp_utils.download_media_file(media_url)
                         response = get_ai_response("", user['subject'], media_data=media_data, media_type="audio")
-                        whatsapp_utils.send_whatsapp_message(phone, response)
+
+                # 3. SEND RESPONSE + FEEDBACK REQUEST
+                if response:
+                    whatsapp_utils.send_whatsapp_message(phone, response)
+                    # Ask for Feedback (New)
+                    whatsapp_utils.send_interactive_buttons(phone, "පුතේ, මේ පිළිතුර පැහැදිලිද? 👇", {"fb_yes": "ඔව් (Yes)", "fb_no": "නෑ (No)"})
 
     except Exception as e:
         print(f"❌ Error: {e}")
