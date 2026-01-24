@@ -20,13 +20,8 @@ genai.configure(api_key=GOOGLE_API_KEY)
 # Gemini 2.0 Flash
 model = genai.GenerativeModel('gemini-2.0-flash')
 
-def clear_database():
-    print("🧹 Cleaning old database records...")
-    try:
-        supabase.table('documents').delete().neq('id', 0).execute()
-        print("✅ Database Cleared!")
-    except Exception as e:
-        print(f"⚠️ Error clearing DB: {e}")
+# ⚠️ Database එක Clear කරන්න ඕන නම් SQL Editor එකෙන් TRUNCATE TABLE documents; රන් කරන්න.
+# Python එකෙන් Clear කරන Function එක අපි අයින් කළා වැරදිලා මැකෙන එක නවත්තන්න.
 
 def get_embedding_with_retry(text, retries=3):
     for attempt in range(retries):
@@ -42,14 +37,16 @@ def get_embedding_with_retry(text, retries=3):
             time.sleep(5)
     return None
 
-def process_pdf(pdf_path, start_page, end_page):
+# --- UPDATE: grade සහ subject_name දෙකම ගන්නවා ---
+def process_pdf(pdf_path, start_page, end_page, grade, subject_name):
     doc = fitz.open(pdf_path)
-    print(f"📘 Processing PDF: {pdf_path}")
+    print(f"📘 Processing: Grade {grade} - {subject_name}")
+    print(f"📂 File: {pdf_path}")
     print(f"📄 Total Pages: {len(doc)}")
     print(f"🎯 Selected Range: Page {start_page} to {end_page}\n")
 
     for page_num, page in enumerate(doc):
-        current_page = page_num + 1  # PDF පිටු අංකය
+        current_page = page_num + 1
 
         # --- PAGE RANGE LOGIC ---
         if current_page < start_page:
@@ -96,7 +93,7 @@ def process_pdf(pdf_path, start_page, end_page):
                 print("\n" + "="*60)
                 print(f"📄 PAGE {current_page} CONTENT:")
                 print("="*60)
-                print(text_content) 
+                print(text_content[:200] + "...") 
                 print("="*60 + "\n")
 
                 # Database Upload
@@ -107,12 +104,15 @@ def process_pdf(pdf_path, start_page, end_page):
                         "content": text_content,
                         "embedding": vector,
                         "metadata": {
-                            "source": "Grade 10 Science", # ⚠️ 1. මෙතන නම වෙනස් කළා
-                            "page": current_page
+                            # 1. Source එකට Grade එකත් එකතු කළා
+                            "source": f"Grade {grade} {subject_name}", 
+                            "page": current_page,
+                            "subject": subject_name, # Filter කරන්න
+                            "grade": grade           # Filter කරන්න (අලුත් field එක)
                         }
                     }
                     supabase.table('documents').insert(data).execute()
-                    print(f"✅ Page {current_page} Uploaded Successfully!\n")
+                    print(f"✅ Page {current_page} Uploaded Successfully! (Gr:{grade} | Sub:{subject_name})\n")
                     success = True
                 else:
                     print(f"❌ Embedding Failed for Page {current_page}")
@@ -127,21 +127,29 @@ def process_pdf(pdf_path, start_page, end_page):
         time.sleep(2)
 
 def main():
-    # ⚠️ 2. මෙතන ඔයාගේ අලුත් පොතේ නම දෙන්න
-    pdf_file = "knowledge/History 10.pdf"
+    # ==========================================
+    # 👇 මෙන්න මෙතන විස්තර වෙනස් කර කර Upload කරන්න
+    # ==========================================
     
-    # ⚠️ 3. පිටු ගාණ හදාගන්න (මුල ඉඳන් යනවා නම් 1 දෙන්න)
-    START_PAGE = 95
-    END_PAGE = 148
+    # 1. PDF එකේ නම
+    pdf_file = "knowledge/health 10.pdf"
+
+    # 2. ශ්‍රේණිය (Grade) - අලුතෙන් දැම්මා
+    GRADE = 10 
+
+    # 3. විෂය (Subject) - (උදා: "Science", "History", "Sinhala")
+    SUBJECT = "Health"
+    
+    # 4. පිටු ගාණ (පටන් ගන්න සහ ඉවර වෙන පිටුව)
+    START_PAGE = 9
+    END_PAGE = 238
+
+    # ==========================================
 
     if os.path.exists(pdf_file):
-        
-        # ⚠️ 4. මෙන්න මේ පේළිය ඉස්සරහට # දැම්මා. (පරණ ඩේටා මැකෙන්නේ නෑ)
-        # clear_database() 
-        
-        print(f"🚀 Starting Append Mode for {pdf_file}...")
-        process_pdf(pdf_file, START_PAGE, END_PAGE)
-        print("\n🎉 New Book Uploaded Successfully!")
+        print(f"🚀 Starting Upload for Grade {GRADE} - {SUBJECT}...")
+        process_pdf(pdf_file, START_PAGE, END_PAGE, GRADE, SUBJECT)
+        print("\n🎉 Book Uploaded Successfully!")
     else:
         print(f"❌ PDF File not found at: {pdf_file}")
 
