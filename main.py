@@ -20,11 +20,10 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 VERIFY_TOKEN = "myguru_secure_token_2026"
 
-# Credit System Config
-FREE_LIMIT = 10 
+# Credit System: REMOVED (Unlimited Access) 🚀
 
-# --- INITIALIZATION LOGS ---
-print("🚀 Starting Server...")
+# --- INITIALIZATION ---
+print("🚀 Starting Smart Guru Brain...")
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -33,15 +32,68 @@ try:
 except Exception as e:
     print(f"❌ Initialization Error: {e}")
 
-SUBJECT_MAP = {
-    "1": "Sinhala", "2": "Mathematics", "3": "Science",
-    "4": "History", "5": "Health", "6": "English"
-}
+# --- HELPER: CONTEXT MEMORY ---
+def get_chat_history(user_id, limit=4):
+    """Fetches the last few messages to understand context."""
+    try:
+        response = supabase.table("chat_logs")\
+            .select("role, message")\
+            .eq("user_id", user_id)\
+            .order("created_at", desc=True)\
+            .limit(limit)\
+            .execute()
+        # Reverse to get chronological order (Oldest -> Newest)
+        return response.data[::-1] if response.data else []
+    except Exception as e:
+        print(f"⚠️ Error fetching history: {e}")
+        return []
+
+def save_chat_log(user_id, role, message):
+    """Saves conversation to database."""
+    try:
+        supabase.table("chat_logs").insert({
+            "user_id": user_id,
+            "role": role,
+            "message": message
+        }).execute()
+    except Exception:
+        pass
+
+# --- THE CORE BRAIN: REWRITE QUERY ---
+def contextualize_query(history, new_query):
+    """
+    If user says "Explain its structure", this function looks at history 
+    and rewrites it to "Explain the structure of 1910 reforms".
+    """
+    if not history:
+        return new_query
+    
+    history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history])
+    
+    prompt = f"""
+    Conversation History:
+    {history_text}
+    
+    User's New Input: "{new_query}"
+    
+    TASK: Rewrite the User's New Input to be a standalone question that makes sense without the history. 
+    Replace words like "it", "that", "ehi", "eke" with the actual subject from history.
+    If the input is already clear, return it as is.
+    ONLY return the rewritten query.
+    """
+    
+    try:
+        resp = model.generate_content(prompt)
+        rewritten = resp.text.strip()
+        print(f"🔄 Query Rewritten: '{new_query}' -> '{rewritten}'")
+        return rewritten
+    except:
+        return new_query
 
 # --- SMART ROUTER ---
-def detect_subject_and_query(user_input):
+def detect_subject(query):
     prompt = f"""
-    Analyze query: "{user_input}"
+    Analyze query: "{query}"
     Identify subject from: ['Sinhala', 'Science', 'History', 'Health', 'Mathematics', 'English'].
     If unsure, return 'General'.
     Return JSON: {{"subject": "..."}}
@@ -53,24 +105,28 @@ def detect_subject_and_query(user_input):
     except:
         return "General"
 
-# --- AI RESPONSE GENERATOR ---
-def get_ai_response(user_input, user_details, media_data=None, media_type=None):
+# --- MAIN AI RESPONSE GENERATOR ---
+def get_ai_response(user_input, user_details, history, media_data=None, media_type=None):
     try:
-        print(f"🧠 AI Processing: {user_input[:20]}...")
-        query_text = user_input
-        language = user_details.get('language', 'Sinhala')
+        # Step 1: Query Contextualization (The "Memory" Part)
+        # We rewrite the query ONLY if it's text. Images usually stand alone.
+        search_query = user_input
+        if media_type == "text":
+            search_query = contextualize_query(history, user_input)
         
+        # Step 2: Handle Images
         if media_type == "image":
             print("🖼️ Analyzing Image...")
             image = PIL.Image.open(io.BytesIO(media_data))
-            vision_resp = model.generate_content(["Describe this educational image in detail using strict academic terminology.", image])
-            query_text = vision_resp.text
-        
-        detected_subject = detect_subject_and_query(query_text)
-        print(f"📚 Detected Subject: {detected_subject}")
+            vision_resp = model.generate_content(["Extract all educational text and diagrams from this image.", image])
+            search_query += f" [Image Context: {vision_resp.text}]"
 
-        # Search
-        embedding = genai.embed_content(model="models/text-embedding-004", content=query_text, task_type="retrieval_query")['embedding']
+        # Step 3: Subject Detection
+        detected_subject = detect_subject(search_query)
+        print(f"📚 Subject: {detected_subject} | 🔍 Search Query: {search_query}")
+
+        # Step 4: Retrieval (RAG) using the REWRITTEN query
+        embedding = genai.embed_content(model="models/text-embedding-004", content=search_query, task_type="retrieval_query")['embedding']
         
         rpc_params = {
             "query_embedding": embedding,
@@ -82,49 +138,46 @@ def get_ai_response(user_input, user_details, media_data=None, media_type=None):
 
         response = supabase.rpc("match_documents", rpc_params).execute()
         
+        # Fallback Global Search
         if not response.data and detected_subject != "General":
-            print("🔄 Switching to Global Search...")
-            del rpc_params["filter"]
+            print("🔄 Global Search Fallback...")
+            if "filter" in rpc_params: del rpc_params["filter"]
             response = supabase.rpc("match_documents", rpc_params).execute()
 
-        context_text = ""
+        # Step 5: Construct Context
         source_found = False
+        context_text = ""
         if response.data:
             source_found = True
             context_text = "\n\n".join([f"[SOURCE START]\n{doc['content']}\n[SOURCE END]" for doc in response.data])
 
-        # 🔥 UPDATED SYSTEM INSTRUCTION (Strict Textbook Terminology)
+        # Step 6: The "Marking Scheme" Personality
         system_instruction = f"""
-        You are 'My Guru', a friendly and expert Sri Lankan O/L teacher.
-        User Language: {language}
+        You are 'My Guru', an expert Sri Lankan O/L Teacher.
+        User Language: {user_details.get('language', 'Sinhala')}
         Source Found: {source_found}
 
-        RULES FOR ANSWERING:
-        1. **STRICT TEXTBOOK TERMINOLOGY:** You MUST use the exact technical terms (පාරිභාෂික වචන) found in the [SOURCE] context. 
-           - Do NOT use synonyms or direct translations if they differ from the source.
-           - Example: If source says "අන්තර්හාර නියුරෝන", use THAT. Do NOT use "අන්තර් ස්නායු සෛල".
-        
-        2. **TONE & STYLE:** - Always address the student as "පුතේ" (Puthe).
-           - Be encouraging and kind. 
-           - Use relevant Emojis (📚, 🧠, ✅, 🔬) to make the message attractive.
-           - Structure the answer with Bullet Points for readability.
+        TASK: Answer based on the [SOURCE] context like an **Exam Marking Scheme**.
 
-        3. **CONTENT FIDELITY:** - Base your answer ONLY on the provided [SOURCE] context.
-           - If the user's question is unclear/Singlish, understand the INTENT but reply in correct Sinhala/English based on the textbook.
+        RULES:
+        1. **Context Awareness:** The user might ask "What about it?" referring to previous chat. Use the context to understand.
+        2. **Marking Scheme Style:** - Do not write long paragraphs. 
+           - Use Bullet Points (•).
+           - Bold (**text**) the key technical terms.
+        3. **Strict Terminology:** Use the EXACT Sinhala/English technical terms from the source.
+        4. **Completeness:** If multiple sources are found, synthesize them into ONE complete answer.
+        5. **No Fluff:** Do not say "Please check the book". Give the answer directly.
+        6. **Missing Info:** If the answer is NOT in the source, say: "පුතේ, මගේ Database එකේ මේ ගැන කරුණු නැහැ. නමුත් O/L විෂය නිර්දේශයට අනුව..." and provide the correct general knowledge answer.
 
-        4. **MISSING INFO:**
-           - If 'Source Found' is False, politely say: "පුතේ, මේ කරුණු මගේ පොත්වල (Database) දැනට සටහන් වෙලා නෑ. හැබැයි මම දන්න විදියට..." and then give a general correct answer.
-
-        CONTEXT FROM TEXTBOOK:
+        CONTEXT FROM DATABASE:
         {context_text}
         """
         
         prompt_parts = [system_instruction]
         if media_type == "image": prompt_parts.append(PIL.Image.open(io.BytesIO(media_data)))
-        prompt_parts.append(f"Student Question: {query_text}")
+        prompt_parts.append(f"Student Question: {search_query}") # We use the rewritten query here
 
         final_resp = model.generate_content(prompt_parts)
-        print("✅ Answer Generated!")
         return final_resp.text.strip()
 
     except Exception as e:
@@ -132,19 +185,11 @@ def get_ai_response(user_input, user_details, media_data=None, media_type=None):
         traceback.print_exc()
         return "පුතේ, පොඩි තාක්ෂණික දෝෂයක්. ආයේ අහන්නකෝ. 🛠️"
 
-# --- WEBHOOK ROUTES ---
-@app.get("/api/webhook")
-async def verify_webhook(request: Request):
-    if request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
-        return int(request.query_params.get("hub.challenge"))
-    raise HTTPException(status_code=403, detail="Verification failed")
-
+# --- WEBHOOK HANDLER ---
 @app.post("/api/webhook")
 async def handle_message(request: Request):
     try:
         data = await request.json()
-        print(f"🔔 Webhook Data: {json.dumps(data)}")
-
         if not data.get('entry'): return {"status": "ignored"}
         entry = data['entry'][0]['changes'][0]['value']
         
@@ -152,82 +197,72 @@ async def handle_message(request: Request):
             msg = entry['messages'][0]
             phone = msg['from']
             msg_type = msg['type']
-            print(f"📩 Message from {phone} | Type: {msg_type}")
             
-            # 1. User Check
+            # 1. Get/Create User
             user_response = supabase.table("users").select("*").eq("phone_number", phone).execute()
-            
             if not user_response.data:
-                print("🆕 New User Detected!")
-                supabase.table("users").insert({
-                    "phone_number": phone, 
-                    "setup_stage": "language",
-                    "question_count": 0,
-                    "is_paid": False
-                }).execute()
+                supabase.table("users").insert({"phone_number": phone, "setup_stage": "language"}).execute()
                 whatsapp_utils.send_interactive_buttons(phone, "Welcome to My Guru! 🎓\nSelect your language:", {"sin": "සිංහල", "eng": "English"})
                 return {"status": "ok"}
 
             user = user_response.data[0]
             stage = user.get('setup_stage')
-            print(f"👤 User Stage: {stage}")
 
-            # --- LOGIC FLOW ---
+            # 2. Logic Flow
             if stage == "language":
                 if msg_type == "interactive":
-                    selection = msg['interactive']['button_reply']['id']
-                    lang = "Sinhala" if selection == "sin" else "English"
+                    sel = msg['interactive']['button_reply']['id']
+                    lang = "Sinhala" if sel == "sin" else "English"
                     supabase.table("users").update({"language": lang, "setup_stage": "level"}).eq("phone_number", phone).execute()
-                    
-                    msg_text = "හොඳයි පුතේ! ඔයා සූදානම් වෙන්නේ මොන විභාගයටද?" if lang == "Sinhala" else "Great! Which exam are you preparing for?"
-                    whatsapp_utils.send_interactive_buttons(phone, msg_text, {"ol": "O/L", "al": "A/L"})
+                    whatsapp_utils.send_interactive_buttons(phone, "Select Exam:", {"ol": "O/L", "al": "A/L"})
                 else:
-                    # Fix: Re-send buttons if text is sent
-                    whatsapp_utils.send_interactive_buttons(phone, "Welcome to My Guru! 🎓\nSelect your language:", {"sin": "සිංහල", "eng": "English"})
+                    whatsapp_utils.send_interactive_buttons(phone, "Select Language:", {"sin": "සිංහල", "eng": "English"})
 
             elif stage == "level":
                 if msg_type == "interactive":
-                    level = msg['interactive']['button_reply']['id']
-                    if level == "ol":
-                        supabase.table("users").update({"grade": "O/L", "setup_stage": "subject_select"}).eq("phone_number", phone).execute()
-                        sub_msg = "පුතේ, ඔයාට අවශ්‍ය විෂය අංකය එවන්න:\n\n1️⃣ සිංහල (Sinhala)\n2️⃣ ගණිතය (Mathematics)\n3️⃣ විද්‍යාව (Science)\n4️⃣ ඉතිහාසය (History)\n5️⃣ සෞඛ්‍යය (Health)\n6️⃣ ඉංග්‍රීසි (English)"
-                        whatsapp_utils.send_whatsapp_message(phone, sub_msg)
+                    if msg['interactive']['button_reply']['id'] == "ol":
+                        supabase.table("users").update({"grade": "O/L", "setup_stage": "active"}).eq("phone_number", phone).execute()
+                        whatsapp_utils.send_whatsapp_message(phone, "හරි පුතේ! O/L පටන් ගමු. කැමති ප්‍රශ්නයක් අහන්න. 📚")
                     else:
-                        whatsapp_utils.send_whatsapp_message(phone, "සමාවෙන්න පුතේ, දැනට අපි උදව් කරන්නේ O/L වලට විතරයි. 🔜")
-                else:
-                    whatsapp_utils.send_interactive_buttons(phone, "Select your exam:", {"ol": "O/L", "al": "A/L"})
+                        whatsapp_utils.send_whatsapp_message(phone, "Sorry, O/L only for now.")
 
-            elif stage == "subject_select":
-                if msg_type == "text":
-                    selection = msg['text']['body'].strip()
-                    subject = SUBJECT_MAP.get(selection)
-                    if subject:
-                        supabase.table("users").update({"current_subject": subject, "setup_stage": "active"}).eq("phone_number", phone).execute()
-                        whatsapp_utils.send_whatsapp_message(phone, f"හරි! අපි {subject} පාඩම් පටන් ගමු. 📚")
-                    else:
-                        whatsapp_utils.send_whatsapp_message(phone, "පුතේ, අදාල අංකය (1-6) පමණක් එවන්න. 👇")
-
-            elif stage == "active":
-                print("🎓 Processing Question...")
+            elif stage == "active": # Or 'subject_select' (skipped for simplicity/unlimited flow)
                 
-                # Credit Check
-                if not user.get('is_paid', False) and user.get('question_count', 0) >= FREE_LIMIT:
-                     whatsapp_utils.send_whatsapp_message(phone, "පුතේ, ඔයාගේ Free ප්‍රශ්න ගණන ඉවරයි. 😔")
-                     return {"status": "ok"}
-
+                # --- UNLIMITED QUESTIONS (No Credit Check) ---
+                
+                # Fetch History for Context
+                history = get_chat_history(user['id'])
+                
                 response = None
+                user_text = ""
+
                 if msg_type == "text":
-                    response = get_ai_response(msg['text']['body'], user, media_type="text")
-                # Image/Audio logic here if needed
+                    user_text = msg['text']['body']
+                    response = get_ai_response(user_text, user, history, media_type="text")
+                
+                elif msg_type == "image":
+                    user_text = msg['image'].get('caption', "[Image Sent]")
+                    media_url = whatsapp_utils.get_media_url(msg['image']['id'])
+                    if media_url:
+                        media_data = whatsapp_utils.download_media_file(media_url)
+                        response = get_ai_response(user_text, user, history, media_data=media_data, media_type="image")
 
                 if response:
-                    print(f"📤 Sending Reply: {response[:20]}...")
+                    print(f"📤 Sending: {response[:30]}...")
                     whatsapp_utils.send_whatsapp_message(phone, response)
-                    new_count = user.get('question_count', 0) + 1
-                    supabase.table("users").update({"question_count": new_count}).eq("phone_number", phone).execute()
+                    
+                    # Save Conversation to History
+                    save_chat_log(user['id'], "user", user_text)
+                    save_chat_log(user['id'], "bot", response)
 
     except Exception as e:
-        print(f"❌ Critical Error in handle_message: {e}")
+        print(f"❌ Error: {e}")
         traceback.print_exc()
 
     return {"status": "ok"}
+
+@app.get("/api/webhook")
+async def verify_webhook(request: Request):
+    if request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
+        return int(request.query_params.get("hub.challenge"))
+    raise HTTPException(status_code=403, detail="Verification failed")
