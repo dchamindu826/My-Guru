@@ -128,13 +128,13 @@ def process_pdf(pdf_path, start_page, end_page, grade, subject_name):
 
 def main():
     # ==========================================
-    # 👇 මෙන්න මෙතන විස්තර වෙනස් කර කර Upload කරන්න
+    # 👇 Before Update Data
     # ==========================================
     
     # 1. PDF එකේ නම
     pdf_file = "knowledge/health 10.pdf"
 
-    # 2. ශ්‍රේණිය (Grade) - අලුතෙන් දැම්මා
+    # 2. ශ්‍රේණිය (Grade) - 
     GRADE = 10 
 
     # 3. විෂය (Subject) - (උදා: "Science", "History", "Sinhala")
