@@ -21,7 +21,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 VERIFY_TOKEN = "myguru_secure_token_2026"
 
 # --- INITIALIZATION ---
-print("🚀 Starting Smart Guru Brain (HYBRID SEARCH MODE)...")
+print("🚀 Starting Smart Guru Brain (BEAUTIFUL MODE)...")
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -86,14 +86,14 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
             vision_resp = model.generate_content(["Extract text.", image])
             search_query += f" {vision_resp.text}"
 
-        # 2. HYBRID SEARCH STRATEGY
+        # 2. HYBRID SEARCH STRATEGY (Logic Unchanged)
         unique_docs = {}
 
-        # A. Vector Search (Semantic)
+        # A. Vector Search
         embedding = genai.embed_content(model="models/text-embedding-004", content=search_query, task_type="retrieval_query")['embedding']
         vector_res = supabase.rpc("match_documents", {
             "query_embedding": embedding,
-            "match_threshold": 0.1, # Very low threshold to catch everything
+            "match_threshold": 0.1, 
             "match_count": 20,
             "filter": {}
         }).execute()
@@ -101,14 +101,11 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         for doc in vector_res.data:
             unique_docs[doc['id']] = doc
 
-        # B. Keyword Search (Exact Match - The Fix!)
-        # If we have a strong keyword like "ගුණාත්මකභාවය", we force a search for it.
+        # B. Keyword Search
         if strict_keyword and len(strict_keyword) > 2:
             print(f"🚀 Running Strict Search for: {strict_keyword}")
             keyword_res = supabase.table("documents").select("*").ilike("content", f"%{strict_keyword}%").limit(10).execute()
-            
             for doc in keyword_res.data:
-                # Add to list if not already there
                 if doc['id'] not in unique_docs:
                     print(f"➕ Added Page {doc['metadata'].get('page')} via Keyword Search")
                     unique_docs[doc['id']] = doc
@@ -120,27 +117,36 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         
         if docs_list:
             source_found = True
-            # Sort by page number to make reading logical
             docs_list.sort(key=lambda x: x['metadata'].get('page', 0))
-            
-            found_pages = [d['metadata'].get('page') for d in docs_list]
-            print(f"✅ Final Pages Used: {found_pages}")
-            
             context_text = "\n\n".join([f"SOURCE (Page {d['metadata'].get('page')}):\n{d['content']}" for d in docs_list])
 
-        # 4. Generate Answer
+        # 🔥 Step 4: BEAUTIFUL & FRIENDLY PERSONA (Updated)
         system_instruction = f"""
-        You are 'My Guru', a Sri Lankan O/L Teacher.
+        You are 'My Guru', a very kind and friendly Sri Lankan O/L Teacher.
         User Language: {user_details.get('language', 'Sinhala')}
         Source Found: {source_found}
 
-        TASK: Answer strictly based on the [SOURCE] text provided.
+        TASK: Explain the answer to the student based **ONLY** on the provided [SOURCE].
 
-        RULES:
-        1. **SCAN ALL PAGES:** The answer might be in a page added via keyword search (e.g. Page 10-20). Look closely.
-        2. **LISTS:** If the user asks for "Lakshana" (Characteristics) and there is a bulleted list in the source, COPY IT EXACTLY.
-        3. **NO HALLUCINATIONS:** Only use provided text.
-        4. **FORMAT:** Bullet points, Bold keys.
+        🎨 PRESENTATION RULES (CRITICAL):
+        1. **Greeting:** Start warmly with "පුතේ," (Puthe). 
+           (e.g., "පුතේ, ඔයා අහන්නේ ... ගැන නේද? හරි, ඔයාගේ පොතේ ඒ ගැන මෙන්න මේ විදියට තියෙනවා. 👇")
+        
+        2. **Layout & Spacing:**
+           - Do NOT write long paragraphs.
+           - Use **Bullet Points** (•) for lists.
+           - **IMPORTANT:** Add an **Empty Line** between each bullet point so it is easy to read.
+        
+        3. **Emojis:** Use relevant emojis liberally to make it attractive (e.g., 🧠, 📚, ✅, 🌿, 🏥, 🇱🇰).
+
+        4. **Formatting:** Use **Bold** (*text*) for key terms.
+
+        5. **Closing:** End with an encouraging message. 
+           (e.g., "තව මොනවා හරි දැනගන්න ඕන නම් අහන්න හොඳේ! 💪🎓")
+
+        ⛔ ACCURACY RULES:
+        - If the source has a list (e.g., characteristics), COPY IT EXACTLY.
+        - Do not hallucinate.
 
         CONTEXT FROM DATABASE:
         {context_text}
