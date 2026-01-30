@@ -1,8 +1,7 @@
 import os
-import time
 import json
 import traceback
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from supabase import create_client
 import google.generativeai as genai
 import whatsapp_utils
@@ -20,15 +19,19 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 VERIFY_TOKEN = "myguru_secure_token_2026"
 
-# 🔥 Health Book File ID (Make sure this matches your upload)
-HEALTH_FILE_NAME = "files/o21hwlhrlrfd"
+# 🔥 Health Book File ID
+HEALTH_FILE_NAME = "files/o21hwlhrlrfd" 
 
 # --- INIT ---
-print("🚀 Starting Smart Guru (Direct File Mode)...")
+print("🚀 Starting Smart Guru (PRO MODE - HIGH ACCURACY)...")
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    # 🔥 CRITICAL CHANGE: Using 'gemini-1.5-pro' instead of 'flash'
+    # 'Pro' is slower but MUCH smarter at reading Sinhala PDFs accurately.
+    model = genai.GenerativeModel('gemini-1.5-pro') 
+    
     print("✅ Services Initialized Successfully!")
 except Exception as e:
     print(f"❌ Initialization Error: {e}")
@@ -47,29 +50,29 @@ def save_chat_log(user_id, role, message):
     except:
         pass
 
-# --- AI ENGINE (DIRECT FILE ACCESS) ---
-def get_ai_response(user_input, user_details, history, media_data=None, media_type=None):
+# --- AI PROCESSING (BACKGROUND TASK) ---
+def process_and_reply(user_input, phone, user, media_data=None, media_type=None):
     try:
-        print(f"🧠 Processing Query: {user_input}")
-
-        # 1. Message History
+        print(f"⏳ [PRO] Thinking about: {user_input}...")
+        
+        history = get_chat_history(user['id'])
         history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history]) if history else ""
 
-        # 2. System Instruction
+        # 🔥 ADVANCED PROMPT (FOR ACCURACY)
         system_instruction = f"""
-        You are 'My Guru', a friendly Sri Lankan O/L Teacher.
-        User Language: {user_details.get('language', 'Sinhala')}
+        You are 'My Guru', a Sri Lankan O/L Teacher.
+        User Language: {user.get('language', 'Sinhala')}
         
-        TASK: You have access to the Grade 10 Health Textbook (attached).
-        Find the answer strictly from this book.
-
+        TASK:
+        1. **ANALYZE:** Convert the user's Singlish input (e.g., "Thahanam uththejana") into the correct Sinhala textbook term ("තහනම් උත්තේජක").
+        2. **SEARCH:** Scan the attached PDF specifically for that Sinhala term.
+        3. **EXTRACT:** Find the exact bullet points or explanation in the book.
+        
         RULES:
-        1. **LOOK EVERYWHERE:** The answer might be deep inside the book. Scan carefully.
-        2. **TRANSLATE:** If user asks in Singlish (e.g., "gunathmakabawaya"), find the Sinhala term ("ගුණාත්මකභාවය") in the book.
-        3. **EXACT LISTS:** If the book has a list (e.g., characteristics/lakshana), copy them EXACTLY.
-        4. **FORMAT:** Start with "පුතේ," (Puthe). Use Bullet Points (•) and Emojis.
-        5. **NO HALLUCINATIONS:** If it's not in the book, say so.
-
+        - **NO GUESSING:** If the user asks for "consequences" (adinawa), find the specific list in the book. Do not give general advice like "smoking is bad" unless specifically asked.
+        - **STRICT SOURCE TRUTH:** Only say what is in the PDF.
+        - **FORMAT:** Start with "පුතේ,". Use Bullet points (•) and Bold text.
+        
         Chat History:
         {history_text}
         
@@ -77,32 +80,31 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         """
 
         prompt_parts = [system_instruction]
-
-        # 3. 🔥 FIX: Attach the PDF File Object DIRECTLY
-        # Dictionary එකක් විදියට නෙවෙයි, කෙලින්ම Object එක දානවා
-        print(f"📂 Fetching File: {HEALTH_FILE_NAME}...")
+        
+        # Attach Book
         file_obj = genai.get_file(HEALTH_FILE_NAME)
         prompt_parts.append(file_obj)
 
-        # 4. Add User Image if exists
         if media_type == "image":
              prompt_parts.append(PIL.Image.open(io.BytesIO(media_data)))
 
-        # 5. Generate
-        print("🔍 Searching inside the FULL Health Textbook...")
+        # Generate with PRO model
+        print("🔍 Deep Scanning PDF with Gemini 1.5 PRO...")
         final_resp = model.generate_content(prompt_parts)
+        bot_reply = final_resp.text.strip()
         
-        print("✅ Answer Generated!")
-        return final_resp.text.strip()
+        print("✅ Answer Ready!")
+        whatsapp_utils.send_whatsapp_message(phone, bot_reply)
+        save_chat_log(user['id'], "user", user_input)
+        save_chat_log(user['id'], "bot", bot_reply)
 
     except Exception as e:
-        print(f"❌ AI Error: {e}")
+        print(f"❌ Error: {e}")
         traceback.print_exc()
-        return "පුතේ, පොඩි තාක්ෂණික දෝෂයක්. මට පොත පෙරලගන්න බැරි වුනා. 🛠️"
 
 # --- WEBHOOKS ---
 @app.post("/api/webhook")
-async def handle_message(request: Request):
+async def handle_message(request: Request, background_tasks: BackgroundTasks):
     try:
         data = await request.json()
         if not data.get('entry'): return {"status": "ignored"}
@@ -120,30 +122,23 @@ async def handle_message(request: Request):
                 return {"status": "ok"}
 
             user = user_response.data[0]
-            stage = user.get('setup_stage')
-
-            # Force Active stage for testing
-            if stage != "active":
+            if user.get('setup_stage') != "active":
                  supabase.table("users").update({"setup_stage": "active"}).eq("phone_number", phone).execute()
             
-            history = get_chat_history(user['id'])
-            response = None
             user_text = ""
-
+            media_data = None
+            
             if msg_type == "text":
                 user_text = msg['text']['body']
-                response = get_ai_response(user_text, user, history, media_type="text")
             elif msg_type == "image":
                 user_text = msg['image'].get('caption', "[Image Sent]")
                 media_url = whatsapp_utils.get_media_url(msg['image']['id'])
                 if media_url:
                     media_data = whatsapp_utils.download_media_file(media_url)
-                    response = get_ai_response(user_text, user, history, media_data=media_data, media_type="image")
 
-            if response:
-                whatsapp_utils.send_whatsapp_message(phone, response)
-                save_chat_log(user['id'], "user", user_text)
-                save_chat_log(user['id'], "bot", response)
+            if user_text:
+                # Add to Background Task (Allows PRO model to take its time)
+                background_tasks.add_task(process_and_reply, user_text, phone, user, media_data, msg_type)
 
     except Exception as e:
         print(f"❌ Error: {e}")
