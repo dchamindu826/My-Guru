@@ -5,35 +5,51 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-
-def get_headers():
-    return {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json",
-    }
+# Configs
+ACCESS_TOKEN = os.getenv("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_ID")
+VERSION = "v18.0"
 
 def send_whatsapp_message(to, body):
-    """සාමාන්‍ය Text මැසේජ් යැවීමට"""
-    url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
+    url = f"https://graph.facebook.com/{VERSION}/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
     data = {
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
         "text": {"body": body},
     }
-    requests.post(url, headers=get_headers(), json=data)
+    
+    print(f"🚀 ATTEMPTING TO SEND to {to}...") 
+    response = requests.post(url, headers=headers, json=data)
+    
+    # 🔥 මෙන්න මේ ටිකෙන් තමයි ලෙඩේ අල්ලන්නේ
+    if response.status_code == 200:
+        print("✅ Message Sent Successfully!")
+        return response.json()
+    else:
+        print(f"❌ WhatsApp API Error: {response.status_code}")
+        print(f"❌ Error Details: {response.text}") # Meta එකෙන් එවන සම්පූර්ණ විස්තරේ
+        return None
 
-def send_interactive_buttons(to, text, buttons):
-    """Buttons 3ක් දක්වා යැවීමට (O/L vs A/L)"""
-    url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
+def send_interactive_buttons(to, body_text, buttons):
+    url = f"https://graph.facebook.com/{VERSION}/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
     
     button_list = []
     for btn_id, btn_title in buttons.items():
         button_list.append({
             "type": "reply",
-            "reply": {"id": btn_id, "title": btn_title}
+            "reply": {
+                "id": btn_id,
+                "title": btn_title
+            }
         })
 
     data = {
@@ -42,44 +58,32 @@ def send_interactive_buttons(to, text, buttons):
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {"text": text},
+            "body": {"text": body_text},
             "action": {"buttons": button_list}
         }
     }
-    requests.post(url, headers=get_headers(), json=data)
-
-def send_interactive_list(to, text, button_text, sections):
-    """දිග විෂයන් ලිස්ට් එකක් යැවීමට"""
-    url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
     
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "list",
-            "body": {"text": text},
-            "action": {
-                "button": button_text,
-                "sections": sections
-            }
-        }
-    }
-    response = requests.post(url, headers=get_headers(), json=data)
-    if response.status_code != 200:
-        print(f"Error sending list: {response.text}")
-
-def get_media_url(media_id):
-    """WhatsApp Media ID එකෙන් URL එක ගැනීම"""
-    url = f"https://graph.facebook.com/v22.0/{media_id}"
-    response = requests.get(url, headers=get_headers())
+    print(f"🚀 ATTEMPTING BUTTONS to {to}...")
+    response = requests.post(url, headers=headers, json=data)
+    
     if response.status_code == 200:
-        return response.json().get('url')
+        print("✅ Buttons Sent Successfully!")
+    else:
+        print(f"❌ WhatsApp Button Error: {response.status_code}")
+        print(f"❌ Error Details: {response.text}")
+
+# --- Media Functions ---
+def get_media_url(media_id):
+    url = f"https://graph.facebook.com/{VERSION}/{media_id}"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json().get("url")
     return None
 
 def download_media_file(media_url):
-    """URL එකෙන් Image/Audio ෆයිල් එක බාගැනීම"""
-    response = requests.get(media_url, headers=get_headers())
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    response = requests.get(media_url, headers=headers)
     if response.status_code == 200:
         return response.content
     return None
