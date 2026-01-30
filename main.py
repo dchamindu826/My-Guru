@@ -77,7 +77,7 @@ def contextualize_query(history, new_query):
     User's New Input: "{new_query}"
     
     TASK: Rewrite the User's New Input to be a standalone question that makes sense without the history. 
-    Replace words like "it", "that", "ehi", "eke" with the actual subject from history.
+    Replace words like "it", "that", "ehi", "eke", "mokakda" with the actual subject from history.
     If the input is already clear, return it as is.
     ONLY return the rewritten query.
     """
@@ -109,7 +109,6 @@ def detect_subject(query):
 def get_ai_response(user_input, user_details, history, media_data=None, media_type=None):
     try:
         # Step 1: Query Contextualization (The "Memory" Part)
-        # We rewrite the query ONLY if it's text. Images usually stand alone.
         search_query = user_input
         if media_type == "text":
             search_query = contextualize_query(history, user_input)
@@ -151,23 +150,33 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
             source_found = True
             context_text = "\n\n".join([f"[SOURCE START]\n{doc['content']}\n[SOURCE END]" for doc in response.data])
 
-        # Step 6: The "Marking Scheme" Personality
+        # 🔥 Step 6: The "Marking Scheme" Personality (STRICTER VERSION)
         system_instruction = f"""
         You are 'My Guru', an expert Sri Lankan O/L Teacher.
         User Language: {user_details.get('language', 'Sinhala')}
         Source Found: {source_found}
 
-        TASK: Answer based on the [SOURCE] context like an **Exam Marking Scheme**.
+        TASK: Answer the student's question based strictly on the provided sources, formatted like a **Model Answer (Marking Scheme)**.
 
-        RULES:
-        1. **Context Awareness:** The user might ask "What about it?" referring to previous chat. Use the context to understand.
-        2. **Marking Scheme Style:** - Do not write long paragraphs. 
-           - Use Bullet Points (•).
-           - Bold (**text**) the key technical terms.
-        3. **Strict Terminology:** Use the EXACT Sinhala/English technical terms from the source.
-        4. **Completeness:** If multiple sources are found, synthesize them into ONE complete answer.
-        5. **No Fluff:** Do not say "Please check the book". Give the answer directly.
-        6. **Missing Info:** If the answer is NOT in the source, say: "පුතේ, මගේ Database එකේ මේ ගැන කරුණු නැහැ. නමුත් O/L විෂය නිර්දේශයට අනුව..." and provide the correct general knowledge answer.
+        ⛔ PROHIBITIONS:
+        - DO NOT say "I will tell you what I know".
+        - DO NOT refer to page numbers (e.g., "Check page 132").
+        - DO NOT make up facts if the source is missing.
+
+        ✅ ANSWERING RULES:
+        1. **STRICT SOURCE USAGE:** - You MUST derive your answer *primarily* from the [SOURCE] context.
+           - Use the EXACT technical terms (Pari Bhashika Wachana) found in the text.
+        
+        2. **IF SOURCE IS MISSING:**
+           - You MUST explicitly state: "පුතේ, මගේ Database එකේ (පෙළ පොත්වල) මේ ගැන කරුණු සඳහන් වෙලා නෑ. හැබැයි O/L විෂය නිර්දේශයට අනුව පිළිතුර මෙයයි:"
+           - Then provide the accurate O/L standard answer from general knowledge.
+
+        3. **FORMATTING (Marking Scheme Style):**
+           - Start with a direct answer or definition.
+           - Use **Bullet Points** for list items.
+           - Use **Bold** for keywords.
+           - Add empty lines between points for readability (Space out the answer).
+           - Use emojis (📚, ✅, 🧠) to make it friendly but professional.
 
         CONTEXT FROM DATABASE:
         {context_text}
@@ -175,7 +184,7 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         
         prompt_parts = [system_instruction]
         if media_type == "image": prompt_parts.append(PIL.Image.open(io.BytesIO(media_data)))
-        prompt_parts.append(f"Student Question: {search_query}") # We use the rewritten query here
+        prompt_parts.append(f"Student Question: {search_query}") 
 
         final_resp = model.generate_content(prompt_parts)
         return final_resp.text.strip()
@@ -226,7 +235,7 @@ async def handle_message(request: Request):
                     else:
                         whatsapp_utils.send_whatsapp_message(phone, "Sorry, O/L only for now.")
 
-            elif stage == "active": # Or 'subject_select' (skipped for simplicity/unlimited flow)
+            elif stage == "active": 
                 
                 # --- UNLIMITED QUESTIONS (No Credit Check) ---
                 
