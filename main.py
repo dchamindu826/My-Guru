@@ -23,7 +23,7 @@ VERIFY_TOKEN = "myguru_secure_token_2026"
 # Credit System: REMOVED (Unlimited Access) 🚀
 
 # --- INITIALIZATION ---
-print("🚀 Starting Smart Guru Brain...")
+print("🚀 Starting Smart Guru Brain (Marking Scheme Mode)...")
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -34,7 +34,6 @@ except Exception as e:
 
 # --- HELPER: CONTEXT MEMORY ---
 def get_chat_history(user_id, limit=4):
-    """Fetches the last few messages to understand context."""
     try:
         response = supabase.table("chat_logs")\
             .select("role, message")\
@@ -57,44 +56,49 @@ def save_chat_log(user_id, role, message):
     except Exception:
         pass
 
-# --- 🔥 THE NEW BRAIN: SINGLISH TO SINHALA CONVERTER ---
-def contextualize_query(history, new_query):
+# --- 🔥 THE TRANSLATOR BRAIN (Singlish -> Textbook Sinhala) ---
+def optimize_search_query(history, raw_input):
     """
-    1. Understands context (e.g., "eke" -> "1910 reforms").
-    2. TRANSLATES Singlish to Sinhala for better database searching.
+    Translates Singlish/English input into EXACT Sinhala Textbook terminology.
     """
     history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history]) if history else ""
     
     prompt = f"""
-    Conversation History:
-    {history_text}
+    Context: {history_text}
+    User Input: "{raw_input}"
     
-    User's Input: "{new_query}"
+    TASK: Convert the User Input into a search query that matches a Sri Lankan O/L Textbook.
     
-    TASK: 
-    1. If the input relies on history (e.g., "eke", "e gena"), rewrite it as a full standalone question.
-    2. **CRITICAL:** If the input is in "Singlish" (Sinhala words in English letters), **TRANSLATE IT TO SINHALA** script.
-       - Example: "cell wala kriyakarithwaya" -> "සෛල වල ක්‍රියාකාරීත්වය"
-       - Example: "gunathmakabawaya" -> "ගුණාත්මකභාවය"
-    3. If the input is in English, keep it in English.
+    RULES:
+    1. If the input is in "Singlish" (e.g., "gunathmakabawaya"), TRANSLATE it to the official "Sinhala" term (e.g., "ගුණාත්මකභාවය").
+    2. If the input asks for a list/features (e.g., "lakshana"), include the Sinhala word for it (e.g., "ලක්ෂණ").
+    3. Remove unnecessary chat words ("mata kiyanna", "ane"). Keep only the KEYWORDS.
+    
+    Example:
+    Input: "Mata kiynn health wala gunathmakabawaya ihala prajawaka dakiya haki lakshana"
+    Output: "සෞඛ්‍යයේ ගුණාත්මකභාවය ඉහළ ප්‍රජාවක දැකිය හැකි ලක්ෂණ"
 
-    OUTPUT: Only the rewritten/translated query.
+    RETURN ONLY THE TRANSLATED SINHALA QUERY.
     """
     
     try:
         resp = model.generate_content(prompt)
-        rewritten = resp.text.strip()
-        print(f"🔄 Search Query Optimized: '{new_query}' -> '{rewritten}'")
-        return rewritten
+        optimized_query = resp.text.strip()
+        print(f"🔄 Singlish: '{raw_input}' \n➡️ Sinhala Search: '{optimized_query}'")
+        return optimized_query
     except:
-        return new_query
+        return raw_input
 
 # --- SMART ROUTER ---
 def detect_subject(query):
+    # Shorten check for speed
+    if any(x in query.lower() for x in ['sin', 'සිංහල']): return 'Sinhala'
+    if any(x in query.lower() for x in ['sci', 'විද්‍යා']): return 'Science'
+    if any(x in query.lower() for x in ['his', 'ඉතිහාස']): return 'History'
+    
     prompt = f"""
-    Analyze query: "{query}"
-    Identify subject from: ['Sinhala', 'Science', 'History', 'Health', 'Mathematics', 'English'].
-    If unsure, return 'General'.
+    Identify O/L Subject: "{query}"
+    Options: ['Sinhala', 'Science', 'History', 'Health', 'Mathematics', 'English'].
     Return JSON: {{"subject": "..."}}
     """
     try:
@@ -107,28 +111,29 @@ def detect_subject(query):
 # --- MAIN AI RESPONSE GENERATOR ---
 def get_ai_response(user_input, user_details, history, media_data=None, media_type=None):
     try:
-        # Step 1: Optimize Query (Singlish -> Sinhala)
+        # Step 1: Optimize Query (This fixes the Singlish issue)
         search_query = user_input
         if media_type == "text":
-            search_query = contextualize_query(history, user_input)
+            search_query = optimize_search_query(history, user_input)
         
         # Step 2: Handle Images
         if media_type == "image":
             print("🖼️ Analyzing Image...")
             image = PIL.Image.open(io.BytesIO(media_data))
-            vision_resp = model.generate_content(["Extract all educational text and diagrams from this image.", image])
+            vision_resp = model.generate_content(["Extract all text and explain diagrams in this image.", image])
             search_query += f" [Image Context: {vision_resp.text}]"
 
         # Step 3: Subject Detection
         detected_subject = detect_subject(search_query)
-        print(f"📚 Subject: {detected_subject} | 🔍 Optimized Query: {search_query}")
+        print(f"📚 Subject: {detected_subject}")
 
         # Step 4: Retrieval (RAG)
         embedding = genai.embed_content(model="models/text-embedding-004", content=search_query, task_type="retrieval_query")['embedding']
         
+        # Lower threshold slightly to catch more results
         rpc_params = {
             "query_embedding": embedding,
-            "match_threshold": 0.28,
+            "match_threshold": 0.25, 
             "match_count": 8,
             "filter": {"subject": detected_subject}
         }
@@ -136,7 +141,7 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
 
         response = supabase.rpc("match_documents", rpc_params).execute()
         
-        # Fallback Global Search
+        # Fallback
         if not response.data and detected_subject != "General":
             print("🔄 Global Search Fallback...")
             if "filter" in rpc_params: del rpc_params["filter"]
@@ -147,32 +152,34 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         context_text = ""
         if response.data:
             source_found = True
-            context_text = "\n\n".join([f"[SOURCE START]\n{doc['content']}\n[SOURCE END]" for doc in response.data])
+            # Extract content clearly
+            context_text = "\n\n".join([f"SOURCE ({doc.get('id')}):\n{doc['content']}" for doc in response.data])
 
-        # Step 6: The "Marking Scheme" Personality
+        # 🔥 Step 6: THE MARKING SCHEME EXAMINER PROMPT
         system_instruction = f"""
-        You are 'My Guru', an expert Sri Lankan O/L Teacher.
+        You are an expert Sri Lankan O/L Teacher behaving like a **Marking Scheme**.
         User Language: {user_details.get('language', 'Sinhala')}
         Source Found: {source_found}
 
-        TASK: Answer strictly based on the [SOURCE] context like an **Exam Marking Scheme**.
+        TASK: Answer the student's question based STRICTLY on the provided [SOURCE].
 
-        RULES:
-        1. **STRICT SOURCE USAGE:** You MUST derive your answer *primarily* from the [SOURCE] context.
-        2. **STRICT TERMINOLOGY:** Use the EXACT technical terms (Pari Bhashika Wachana) found in the text.
-        3. **FORMATTING:** - Use Bullet Points (•).
-           - **Bold** key terms.
-           - Add empty lines between points.
-        4. **MISSING INFO:**
-           - If 'Source Found' is False, explicitly say: "පුතේ, මගේ Database එකේ (පෙළ පොත්වල) මේ ගැන කරුණු සඳහන් වෙලා නෑ. නමුත් O/L විෂය නිර්දේශයට අනුව පිළිතුර මෙයයි:" and then provide the answer.
+        ⛔ STRICT RULES:
+        1. **NO FLUFF:** Do not say "Here is what I found" or "Check the book".
+        2. **EXACT MATCH:** If the source lists points (e.g., features, reasons), you MUST list them exactly as they appear.
+        3. **FORMATTING:** - Use **Bullet Points** (•) for every list item.
+           - **Bold** the key terms.
+           - Keep it clean and spaced out.
+        4. **MISSING SOURCE:** - If source is NOT found, say: "පුතේ, පෙළ පොතේ (Database) මේ කොටස සොයාගැනීමට නොහැකි විය. නමුත් විෂය නිර්දේශයට අනුව පිළිතුර මෙයයි:" 
+           - Then provide the accurate O/L answer from general knowledge.
 
         CONTEXT FROM DATABASE:
         {context_text}
+        
+        STUDENT QUESTION: {search_query}
         """
         
         prompt_parts = [system_instruction]
         if media_type == "image": prompt_parts.append(PIL.Image.open(io.BytesIO(media_data)))
-        prompt_parts.append(f"Student Question: {search_query}") 
 
         final_resp = model.generate_content(prompt_parts)
         return final_resp.text.strip()
@@ -195,7 +202,7 @@ async def handle_message(request: Request):
             phone = msg['from']
             msg_type = msg['type']
             
-            # User Management
+            # User Check
             user_response = supabase.table("users").select("*").eq("phone_number", phone).execute()
             if not user_response.data:
                 supabase.table("users").insert({"phone_number": phone, "setup_stage": "language"}).execute()
@@ -205,7 +212,7 @@ async def handle_message(request: Request):
             user = user_response.data[0]
             stage = user.get('setup_stage')
 
-            # Stage Logic
+            # Stage Handling
             if stage == "language":
                 if msg_type == "interactive":
                     sel = msg['interactive']['button_reply']['id']
@@ -230,6 +237,7 @@ async def handle_message(request: Request):
 
                 if msg_type == "text":
                     user_text = msg['text']['body']
+                    # Send straight to brain
                     response = get_ai_response(user_text, user, history, media_type="text")
                 
                 elif msg_type == "image":
@@ -240,7 +248,7 @@ async def handle_message(request: Request):
                         response = get_ai_response(user_text, user, history, media_data=media_data, media_type="image")
 
                 if response:
-                    print(f"📤 Sending Reply...")
+                    print(f"📤 Sending: {response[:30]}...")
                     whatsapp_utils.send_whatsapp_message(phone, response)
                     save_chat_log(user['id'], "user", user_text)
                     save_chat_log(user['id'], "bot", response)
