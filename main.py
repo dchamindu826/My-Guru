@@ -42,14 +42,12 @@ def get_chat_history(user_id, limit=4):
             .order("created_at", desc=True)\
             .limit(limit)\
             .execute()
-        # Reverse to get chronological order (Oldest -> Newest)
         return response.data[::-1] if response.data else []
     except Exception as e:
         print(f"⚠️ Error fetching history: {e}")
         return []
 
 def save_chat_log(user_id, role, message):
-    """Saves conversation to database."""
     try:
         supabase.table("chat_logs").insert({
             "user_id": user_id,
@@ -59,33 +57,34 @@ def save_chat_log(user_id, role, message):
     except Exception:
         pass
 
-# --- THE CORE BRAIN: REWRITE QUERY ---
+# --- 🔥 THE NEW BRAIN: SINGLISH TO SINHALA CONVERTER ---
 def contextualize_query(history, new_query):
     """
-    If user says "Explain its structure", this function looks at history 
-    and rewrites it to "Explain the structure of 1910 reforms".
+    1. Understands context (e.g., "eke" -> "1910 reforms").
+    2. TRANSLATES Singlish to Sinhala for better database searching.
     """
-    if not history:
-        return new_query
-    
-    history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history])
+    history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history]) if history else ""
     
     prompt = f"""
     Conversation History:
     {history_text}
     
-    User's New Input: "{new_query}"
+    User's Input: "{new_query}"
     
-    TASK: Rewrite the User's New Input to be a standalone question that makes sense without the history. 
-    Replace words like "it", "that", "ehi", "eke", "mokakda" with the actual subject from history.
-    If the input is already clear, return it as is.
-    ONLY return the rewritten query.
+    TASK: 
+    1. If the input relies on history (e.g., "eke", "e gena"), rewrite it as a full standalone question.
+    2. **CRITICAL:** If the input is in "Singlish" (Sinhala words in English letters), **TRANSLATE IT TO SINHALA** script.
+       - Example: "cell wala kriyakarithwaya" -> "සෛල වල ක්‍රියාකාරීත්වය"
+       - Example: "gunathmakabawaya" -> "ගුණාත්මකභාවය"
+    3. If the input is in English, keep it in English.
+
+    OUTPUT: Only the rewritten/translated query.
     """
     
     try:
         resp = model.generate_content(prompt)
         rewritten = resp.text.strip()
-        print(f"🔄 Query Rewritten: '{new_query}' -> '{rewritten}'")
+        print(f"🔄 Search Query Optimized: '{new_query}' -> '{rewritten}'")
         return rewritten
     except:
         return new_query
@@ -108,7 +107,7 @@ def detect_subject(query):
 # --- MAIN AI RESPONSE GENERATOR ---
 def get_ai_response(user_input, user_details, history, media_data=None, media_type=None):
     try:
-        # Step 1: Query Contextualization (The "Memory" Part)
+        # Step 1: Optimize Query (Singlish -> Sinhala)
         search_query = user_input
         if media_type == "text":
             search_query = contextualize_query(history, user_input)
@@ -122,9 +121,9 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
 
         # Step 3: Subject Detection
         detected_subject = detect_subject(search_query)
-        print(f"📚 Subject: {detected_subject} | 🔍 Search Query: {search_query}")
+        print(f"📚 Subject: {detected_subject} | 🔍 Optimized Query: {search_query}")
 
-        # Step 4: Retrieval (RAG) using the REWRITTEN query
+        # Step 4: Retrieval (RAG)
         embedding = genai.embed_content(model="models/text-embedding-004", content=search_query, task_type="retrieval_query")['embedding']
         
         rpc_params = {
@@ -150,33 +149,22 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
             source_found = True
             context_text = "\n\n".join([f"[SOURCE START]\n{doc['content']}\n[SOURCE END]" for doc in response.data])
 
-        # 🔥 Step 6: The "Marking Scheme" Personality (STRICTER VERSION)
+        # Step 6: The "Marking Scheme" Personality
         system_instruction = f"""
         You are 'My Guru', an expert Sri Lankan O/L Teacher.
         User Language: {user_details.get('language', 'Sinhala')}
         Source Found: {source_found}
 
-        TASK: Answer the student's question based strictly on the provided sources, formatted like a **Model Answer (Marking Scheme)**.
+        TASK: Answer strictly based on the [SOURCE] context like an **Exam Marking Scheme**.
 
-        ⛔ PROHIBITIONS:
-        - DO NOT say "I will tell you what I know".
-        - DO NOT refer to page numbers (e.g., "Check page 132").
-        - DO NOT make up facts if the source is missing.
-
-        ✅ ANSWERING RULES:
-        1. **STRICT SOURCE USAGE:** - You MUST derive your answer *primarily* from the [SOURCE] context.
-           - Use the EXACT technical terms (Pari Bhashika Wachana) found in the text.
-        
-        2. **IF SOURCE IS MISSING:**
-           - You MUST explicitly state: "පුතේ, මගේ Database එකේ (පෙළ පොත්වල) මේ ගැන කරුණු සඳහන් වෙලා නෑ. හැබැයි O/L විෂය නිර්දේශයට අනුව පිළිතුර මෙයයි:"
-           - Then provide the accurate O/L standard answer from general knowledge.
-
-        3. **FORMATTING (Marking Scheme Style):**
-           - Start with a direct answer or definition.
-           - Use **Bullet Points** for list items.
-           - Use **Bold** for keywords.
-           - Add empty lines between points for readability (Space out the answer).
-           - Use emojis (📚, ✅, 🧠) to make it friendly but professional.
+        RULES:
+        1. **STRICT SOURCE USAGE:** You MUST derive your answer *primarily* from the [SOURCE] context.
+        2. **STRICT TERMINOLOGY:** Use the EXACT technical terms (Pari Bhashika Wachana) found in the text.
+        3. **FORMATTING:** - Use Bullet Points (•).
+           - **Bold** key terms.
+           - Add empty lines between points.
+        4. **MISSING INFO:**
+           - If 'Source Found' is False, explicitly say: "පුතේ, මගේ Database එකේ (පෙළ පොත්වල) මේ ගැන කරුණු සඳහන් වෙලා නෑ. නමුත් O/L විෂය නිර්දේශයට අනුව පිළිතුර මෙයයි:" and then provide the answer.
 
         CONTEXT FROM DATABASE:
         {context_text}
@@ -207,7 +195,7 @@ async def handle_message(request: Request):
             phone = msg['from']
             msg_type = msg['type']
             
-            # 1. Get/Create User
+            # User Management
             user_response = supabase.table("users").select("*").eq("phone_number", phone).execute()
             if not user_response.data:
                 supabase.table("users").insert({"phone_number": phone, "setup_stage": "language"}).execute()
@@ -217,7 +205,7 @@ async def handle_message(request: Request):
             user = user_response.data[0]
             stage = user.get('setup_stage')
 
-            # 2. Logic Flow
+            # Stage Logic
             if stage == "language":
                 if msg_type == "interactive":
                     sel = msg['interactive']['button_reply']['id']
@@ -236,12 +224,7 @@ async def handle_message(request: Request):
                         whatsapp_utils.send_whatsapp_message(phone, "Sorry, O/L only for now.")
 
             elif stage == "active": 
-                
-                # --- UNLIMITED QUESTIONS (No Credit Check) ---
-                
-                # Fetch History for Context
                 history = get_chat_history(user['id'])
-                
                 response = None
                 user_text = ""
 
@@ -257,10 +240,8 @@ async def handle_message(request: Request):
                         response = get_ai_response(user_text, user, history, media_data=media_data, media_type="image")
 
                 if response:
-                    print(f"📤 Sending: {response[:30]}...")
+                    print(f"📤 Sending Reply...")
                     whatsapp_utils.send_whatsapp_message(phone, response)
-                    
-                    # Save Conversation to History
                     save_chat_log(user['id'], "user", user_text)
                     save_chat_log(user['id'], "bot", response)
 
