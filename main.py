@@ -20,7 +20,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 VERIFY_TOKEN = "myguru_secure_token_2026"
 
-# 🔥 ඔයාගේ Upload කරපු Health පොතේ ID එක මෙන්න
+# 🔥 Health Book File ID (Make sure this matches your upload)
 HEALTH_FILE_NAME = "files/o21hwlhrlrfd"
 
 # --- INIT ---
@@ -55,7 +55,7 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         # 1. Message History
         history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history]) if history else ""
 
-        # 2. System Instruction (Personality & Rules)
+        # 2. System Instruction
         system_instruction = f"""
         You are 'My Guru', a friendly Sri Lankan O/L Teacher.
         User Language: {user_details.get('language', 'Sinhala')}
@@ -78,10 +78,11 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
 
         prompt_parts = [system_instruction]
 
-        # 3. 🔥 Attach the PDF File to the prompt
-        # මේකෙන් තමයි Gemini කෙලින්ම අර Link එකට ගිහින් පොත කියවන්නේ
-        file_ref = {"mime_type": "application/pdf", "file_uri": genai.get_file(HEALTH_FILE_NAME).uri}
-        prompt_parts.append(file_ref)
+        # 3. 🔥 FIX: Attach the PDF File Object DIRECTLY
+        # Dictionary එකක් විදියට නෙවෙයි, කෙලින්ම Object එක දානවා
+        print(f"📂 Fetching File: {HEALTH_FILE_NAME}...")
+        file_obj = genai.get_file(HEALTH_FILE_NAME)
+        prompt_parts.append(file_obj)
 
         # 4. Add User Image if exists
         if media_type == "image":
