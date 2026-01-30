@@ -9,7 +9,7 @@ import whatsapp_utils
 from dotenv import load_dotenv
 import PIL.Image
 import io
-from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, NotFound
 
 load_dotenv()
 
@@ -25,14 +25,15 @@ VERIFY_TOKEN = "myguru_secure_token_2026"
 HEALTH_FILE_NAME = "files/o21hwlhrlrfd" 
 
 # --- INIT ---
-print("🚀 Starting Smart Guru (STABLE FLASH MODE)...")
+print("🚀 Starting Smart Guru (ULTIMATE ACCURACY MODE)...")
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     genai.configure(api_key=GOOGLE_API_KEY)
     
-    # 🔥 CRITICAL FIX: Using 'gemini-1.5-flash' (Most Stable & Available Model)
-    # This avoids 404 (Not Found) and 429 (Rate Limit) errors.
-    model = genai.GenerativeModel('gemini-1.5-flash') 
+    # 🔥 CRITICAL FIX: Using 'gemini-pro-latest'
+    # This maps to the Stable 1.5 Pro model which IS in your available list.
+    # PRO model is slower but MUCH more accurate than Flash.
+    model = genai.GenerativeModel('models/gemini-pro-latest') 
     
     print("✅ Services Initialized Successfully!")
 except Exception as e:
@@ -52,28 +53,28 @@ def save_chat_log(user_id, role, message):
     except:
         pass
 
-# --- AI PROCESSING (BACKGROUND TASK WITH RETRY) ---
+# --- AI PROCESSING (BACKGROUND TASK) ---
 def process_and_reply(user_input, phone, user, media_data=None, media_type=None):
     try:
-        print(f"⏳ [FLASH] Thinking about: {user_input}...")
+        print(f"⏳ [PRO] Thinking about: {user_input}...")
         
         history = get_chat_history(user['id'])
         history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history]) if history else ""
 
-        # 🔥 SMART PROMPT (Fixes Skimming)
+        # 🔥 ACCURACY PROMPT
         system_instruction = f"""
         You are 'My Guru', a Sri Lankan O/L Teacher.
         User Language: {user.get('language', 'Sinhala')}
         
         TASK:
-        1. **DECODE:** Convert Singlish (e.g. "adinawa") to Sinhala ("ආදීනව").
-        2. **SEARCH:** Scan the attached PDF for that specific Sinhala term.
-        3. **EXTRACT:** Find the exact bullet points in the book.
+        1. **DECODE:** Convert Singlish terms to Sinhala (e.g. "Adinawa" -> "ආදීනව").
+        2. **SEARCH:** Read the attached Health Textbook thoroughly.
+        3. **EXTRACT:** Find the specific section and list the points exactly.
         
         RULES:
-        - **EXACT MATCH:** If the book lists 5 points, give all 5. Do not summarize.
-        - **FORMAT:** Start with "පුතේ,". Use Bullet points (•) and Bold text.
-        - **NO HALLUCINATIONS:** If it's not in the book, say so.
+        - **NO SUMMARIES:** If the book has a list of 5 points, give all 5.
+        - **STRICT TRUTH:** Only say what is in the PDF.
+        - **FORMAT:** Start with "පුතේ,". Use Bullet points (•) and empty lines between them.
         
         Chat History:
         {history_text}
@@ -90,21 +91,22 @@ def process_and_reply(user_input, phone, user, media_data=None, media_type=None)
         if media_type == "image":
              prompt_parts.append(PIL.Image.open(io.BytesIO(media_data)))
 
-        # 🔥 RETRY LOGIC (To handle any hiccups)
-        max_retries = 3
+        # 🔥 ROBUST RETRY LOGIC
         bot_reply = "පුතේ, පොඩි තාක්ෂණික දෝෂයක්. 🛠️"
-
-        for attempt in range(max_retries):
+        
+        # Try up to 3 times if server is busy
+        for attempt in range(3):
             try:
-                print(f"🔍 Scanning PDF (Attempt {attempt+1})...")
+                print(f"🔍 Deep Scanning (Attempt {attempt+1})...")
                 final_resp = model.generate_content(prompt_parts)
                 bot_reply = final_resp.text.strip()
-                break # Success!
+                break # Success
             except (ResourceExhausted, ServiceUnavailable):
-                print(f"⚠️ Server Busy (Attempt {attempt+1}). Waiting 5s...")
-                time.sleep(5)
+                print("⚠️ Server Busy. Waiting 10 seconds...")
+                time.sleep(10) # Wait longer for Pro model
             except Exception as e:
-                print(f"❌ Generation Error: {e}")
+                print(f"❌ Error: {e}")
+                bot_reply = "පුතේ, මට පොතේ ඒ කොටස හොයාගන්න අමාරුයි. ප්‍රශ්නය තව පොඩ්ඩක් පැහැදිලි කරන්න."
                 break
 
         print("✅ Answer Ready!")
@@ -151,7 +153,6 @@ async def handle_message(request: Request, background_tasks: BackgroundTasks):
                     media_data = whatsapp_utils.download_media_file(media_url)
 
             if user_text:
-                # Add to Background Task (Fast Reply + AI Processing)
                 background_tasks.add_task(process_and_reply, user_text, phone, user, media_data, msg_type)
 
     except Exception as e:
