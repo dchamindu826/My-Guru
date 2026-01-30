@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import traceback
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
@@ -8,6 +9,7 @@ import whatsapp_utils
 from dotenv import load_dotenv
 import PIL.Image
 import io
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 
 load_dotenv()
 
@@ -23,14 +25,14 @@ VERIFY_TOKEN = "myguru_secure_token_2026"
 HEALTH_FILE_NAME = "files/o21hwlhrlrfd" 
 
 # --- INIT ---
-print("🚀 Starting Smart Guru (PRO MODE - HIGH ACCURACY)...")
+print("🚀 Starting Smart Guru (STABLE FLASH MODE)...")
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     genai.configure(api_key=GOOGLE_API_KEY)
     
-    # 🔥 CRITICAL CHANGE: Using 'gemini-1.5-pro' instead of 'flash'
-    # 'Pro' is slower but MUCH smarter at reading Sinhala PDFs accurately.
-    model = genai.GenerativeModel('gemini-1.5-pro') 
+    # 🔥 CRITICAL FIX: Using 'gemini-1.5-flash' (Most Stable & Available Model)
+    # This avoids 404 (Not Found) and 429 (Rate Limit) errors.
+    model = genai.GenerativeModel('gemini-1.5-flash') 
     
     print("✅ Services Initialized Successfully!")
 except Exception as e:
@@ -50,28 +52,28 @@ def save_chat_log(user_id, role, message):
     except:
         pass
 
-# --- AI PROCESSING (BACKGROUND TASK) ---
+# --- AI PROCESSING (BACKGROUND TASK WITH RETRY) ---
 def process_and_reply(user_input, phone, user, media_data=None, media_type=None):
     try:
-        print(f"⏳ [PRO] Thinking about: {user_input}...")
+        print(f"⏳ [FLASH] Thinking about: {user_input}...")
         
         history = get_chat_history(user['id'])
         history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history]) if history else ""
 
-        # 🔥 ADVANCED PROMPT (FOR ACCURACY)
+        # 🔥 SMART PROMPT (Fixes Skimming)
         system_instruction = f"""
         You are 'My Guru', a Sri Lankan O/L Teacher.
         User Language: {user.get('language', 'Sinhala')}
         
         TASK:
-        1. **ANALYZE:** Convert the user's Singlish input (e.g., "Thahanam uththejana") into the correct Sinhala textbook term ("තහනම් උත්තේජක").
-        2. **SEARCH:** Scan the attached PDF specifically for that Sinhala term.
-        3. **EXTRACT:** Find the exact bullet points or explanation in the book.
+        1. **DECODE:** Convert Singlish (e.g. "adinawa") to Sinhala ("ආදීනව").
+        2. **SEARCH:** Scan the attached PDF for that specific Sinhala term.
+        3. **EXTRACT:** Find the exact bullet points in the book.
         
         RULES:
-        - **NO GUESSING:** If the user asks for "consequences" (adinawa), find the specific list in the book. Do not give general advice like "smoking is bad" unless specifically asked.
-        - **STRICT SOURCE TRUTH:** Only say what is in the PDF.
+        - **EXACT MATCH:** If the book lists 5 points, give all 5. Do not summarize.
         - **FORMAT:** Start with "පුතේ,". Use Bullet points (•) and Bold text.
+        - **NO HALLUCINATIONS:** If it's not in the book, say so.
         
         Chat History:
         {history_text}
@@ -88,18 +90,30 @@ def process_and_reply(user_input, phone, user, media_data=None, media_type=None)
         if media_type == "image":
              prompt_parts.append(PIL.Image.open(io.BytesIO(media_data)))
 
-        # Generate with PRO model
-        print("🔍 Deep Scanning PDF with Gemini 1.5 PRO...")
-        final_resp = model.generate_content(prompt_parts)
-        bot_reply = final_resp.text.strip()
-        
+        # 🔥 RETRY LOGIC (To handle any hiccups)
+        max_retries = 3
+        bot_reply = "පුතේ, පොඩි තාක්ෂණික දෝෂයක්. 🛠️"
+
+        for attempt in range(max_retries):
+            try:
+                print(f"🔍 Scanning PDF (Attempt {attempt+1})...")
+                final_resp = model.generate_content(prompt_parts)
+                bot_reply = final_resp.text.strip()
+                break # Success!
+            except (ResourceExhausted, ServiceUnavailable):
+                print(f"⚠️ Server Busy (Attempt {attempt+1}). Waiting 5s...")
+                time.sleep(5)
+            except Exception as e:
+                print(f"❌ Generation Error: {e}")
+                break
+
         print("✅ Answer Ready!")
         whatsapp_utils.send_whatsapp_message(phone, bot_reply)
         save_chat_log(user['id'], "user", user_input)
         save_chat_log(user['id'], "bot", bot_reply)
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Background Task Error: {e}")
         traceback.print_exc()
 
 # --- WEBHOOKS ---
@@ -137,7 +151,7 @@ async def handle_message(request: Request, background_tasks: BackgroundTasks):
                     media_data = whatsapp_utils.download_media_file(media_url)
 
             if user_text:
-                # Add to Background Task (Allows PRO model to take its time)
+                # Add to Background Task (Fast Reply + AI Processing)
                 background_tasks.add_task(process_and_reply, user_text, phone, user, media_data, msg_type)
 
     except Exception as e:
