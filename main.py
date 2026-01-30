@@ -23,7 +23,7 @@ VERIFY_TOKEN = "myguru_secure_token_2026"
 # Credit System: REMOVED (Unlimited Access) 🚀
 
 # --- INITIALIZATION ---
-print("🚀 Starting Smart Guru Brain (Marking Scheme Mode)...")
+print("🚀 Starting Smart Guru Brain (Global Search Mode)...")
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -56,10 +56,10 @@ def save_chat_log(user_id, role, message):
     except Exception:
         pass
 
-# --- 🔥 THE TRANSLATOR BRAIN (Singlish -> Textbook Sinhala) ---
+# --- 🔥 TRANSLATOR (Singlish -> Sinhala) ---
 def optimize_search_query(history, raw_input):
     """
-    Translates Singlish/English input into EXACT Sinhala Textbook terminology.
+    Translates Singlish to Sinhala to ensure Vector Search hits the correct page.
     """
     history_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in history]) if history else ""
     
@@ -67,34 +67,30 @@ def optimize_search_query(history, raw_input):
     Context: {history_text}
     User Input: "{raw_input}"
     
-    TASK: Convert the User Input into a search query that matches a Sri Lankan O/L Textbook.
+    TASK: Translate the input to 'Sinhala' (Textbook Terms) for database searching.
     
-    RULES:
-    1. If the input is in "Singlish" (e.g., "gunathmakabawaya"), TRANSLATE it to the official "Sinhala" term (e.g., "ගුණාත්මකභාවය").
-    2. If the input asks for a list/features (e.g., "lakshana"), include the Sinhala word for it (e.g., "ලක්ෂණ").
-    3. Remove unnecessary chat words ("mata kiyanna", "ane"). Keep only the KEYWORDS.
+    Rules:
+    1. "gunathmakabawaya" -> "ගුණාත්මකභාවය"
+    2. "lakshana" -> "ලක්ෂණ"
+    3. Keep English terms if they are technical (e.g., "Neurone").
     
-    Example:
-    Input: "Mata kiynn health wala gunathmakabawaya ihala prajawaka dakiya haki lakshana"
-    Output: "සෞඛ්‍යයේ ගුණාත්මකභාවය ඉහළ ප්‍රජාවක දැකිය හැකි ලක්ෂණ"
-
-    RETURN ONLY THE TRANSLATED SINHALA QUERY.
+    OUTPUT: Only the translated query.
     """
     
     try:
         resp = model.generate_content(prompt)
         optimized_query = resp.text.strip()
-        print(f"🔄 Singlish: '{raw_input}' \n➡️ Sinhala Search: '{optimized_query}'")
+        print(f"🔄 Search Query Optimized: '{raw_input}' \n➡️ '{optimized_query}'")
         return optimized_query
     except:
         return raw_input
 
 # --- SMART ROUTER ---
 def detect_subject(query):
-    # Shorten check for speed
     if any(x in query.lower() for x in ['sin', 'සිංහල']): return 'Sinhala'
     if any(x in query.lower() for x in ['sci', 'විද්‍යා']): return 'Science'
     if any(x in query.lower() for x in ['his', 'ඉතිහාස']): return 'History'
+    if any(x in query.lower() for x in ['hea', 'සෞඛ්‍ය', 'health']): return 'Health'
     
     prompt = f"""
     Identify O/L Subject: "{query}"
@@ -111,7 +107,7 @@ def detect_subject(query):
 # --- MAIN AI RESPONSE GENERATOR ---
 def get_ai_response(user_input, user_details, history, media_data=None, media_type=None):
     try:
-        # Step 1: Optimize Query (This fixes the Singlish issue)
+        # Step 1: Optimize Query
         search_query = user_input
         if media_type == "text":
             search_query = optimize_search_query(history, user_input)
@@ -120,30 +116,31 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         if media_type == "image":
             print("🖼️ Analyzing Image...")
             image = PIL.Image.open(io.BytesIO(media_data))
-            vision_resp = model.generate_content(["Extract all text and explain diagrams in this image.", image])
+            vision_resp = model.generate_content(["Extract text and explain diagrams.", image])
             search_query += f" [Image Context: {vision_resp.text}]"
 
         # Step 3: Subject Detection
         detected_subject = detect_subject(search_query)
         print(f"📚 Subject: {detected_subject}")
 
-        # Step 4: Retrieval (RAG)
+        # Step 4: Retrieval (RAG) - DUAL STRATEGY
         embedding = genai.embed_content(model="models/text-embedding-004", content=search_query, task_type="retrieval_query")['embedding']
         
-        # Lower threshold slightly to catch more results
+        # Attempt 1: Specific Subject Search
         rpc_params = {
             "query_embedding": embedding,
-            "match_threshold": 0.25, 
-            "match_count": 8,
+            "match_threshold": 0.20, # Low threshold to catch more
+            "match_count": 15,       # Get top 15 matches (anywhere in the book)
             "filter": {"subject": detected_subject}
         }
         if detected_subject == "General": del rpc_params["filter"]
 
+        print("🔍 Attempt 1: Subject Search...")
         response = supabase.rpc("match_documents", rpc_params).execute()
         
-        # Fallback
+        # Attempt 2: GLOBAL FALLBACK (If Subject Search fails)
         if not response.data and detected_subject != "General":
-            print("🔄 Global Search Fallback...")
+            print("🔄 Attempt 2: Global Search (Searching ALL books)...")
             if "filter" in rpc_params: del rpc_params["filter"]
             response = supabase.rpc("match_documents", rpc_params).execute()
 
@@ -152,25 +149,24 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         context_text = ""
         if response.data:
             source_found = True
-            # Extract content clearly
-            context_text = "\n\n".join([f"SOURCE ({doc.get('id')}):\n{doc['content']}" for doc in response.data])
+            # Debug Print: Show which pages were found
+            found_pages = [doc['metadata'].get('page') for doc in response.data]
+            print(f"✅ Found Pages: {found_pages}") 
+            
+            context_text = "\n\n".join([f"SOURCE (Page {doc['metadata'].get('page')}):\n{doc['content']}" for doc in response.data])
 
-        # 🔥 Step 6: THE MARKING SCHEME EXAMINER PROMPT
+        # Step 6: Marking Scheme Prompt
         system_instruction = f"""
-        You are an expert Sri Lankan O/L Teacher behaving like a **Marking Scheme**.
+        You are 'My Guru', an expert Sri Lankan O/L Teacher.
         User Language: {user_details.get('language', 'Sinhala')}
         Source Found: {source_found}
 
-        TASK: Answer the student's question based STRICTLY on the provided [SOURCE].
-
-        ⛔ STRICT RULES:
-        1. **NO FLUFF:** Do not say "Here is what I found" or "Check the book".
-        2. **EXACT MATCH:** If the source lists points (e.g., features, reasons), you MUST list them exactly as they appear.
-        3. **FORMATTING:** - Use **Bullet Points** (•) for every list item.
-           - **Bold** the key terms.
-           - Keep it clean and spaced out.
-        4. **MISSING SOURCE:** - If source is NOT found, say: "පුතේ, පෙළ පොතේ (Database) මේ කොටස සොයාගැනීමට නොහැකි විය. නමුත් විෂය නිර්දේශයට අනුව පිළිතුර මෙයයි:" 
-           - Then provide the accurate O/L answer from general knowledge.
+        TASK: Answer strictly based on the [SOURCE].
+        
+        RULES:
+        1. **EXACTNESS:** Use the points exactly as listed in the source text.
+        2. **NO HALLUCINATIONS:** If the info is missing, say so.
+        3. **FORMAT:** Bullet points, Bold keys, clean spacing.
 
         CONTEXT FROM DATABASE:
         {context_text}
@@ -189,7 +185,7 @@ def get_ai_response(user_input, user_details, history, media_data=None, media_ty
         traceback.print_exc()
         return "පුතේ, පොඩි තාක්ෂණික දෝෂයක්. ආයේ අහන්නකෝ. 🛠️"
 
-# --- WEBHOOK HANDLER ---
+# --- WEBHOOK HANDLER (No Changes Needed Here) ---
 @app.post("/api/webhook")
 async def handle_message(request: Request):
     try:
@@ -202,7 +198,6 @@ async def handle_message(request: Request):
             phone = msg['from']
             msg_type = msg['type']
             
-            # User Check
             user_response = supabase.table("users").select("*").eq("phone_number", phone).execute()
             if not user_response.data:
                 supabase.table("users").insert({"phone_number": phone, "setup_stage": "language"}).execute()
@@ -212,7 +207,6 @@ async def handle_message(request: Request):
             user = user_response.data[0]
             stage = user.get('setup_stage')
 
-            # Stage Handling
             if stage == "language":
                 if msg_type == "interactive":
                     sel = msg['interactive']['button_reply']['id']
@@ -237,9 +231,7 @@ async def handle_message(request: Request):
 
                 if msg_type == "text":
                     user_text = msg['text']['body']
-                    # Send straight to brain
                     response = get_ai_response(user_text, user, history, media_type="text")
-                
                 elif msg_type == "image":
                     user_text = msg['image'].get('caption', "[Image Sent]")
                     media_url = whatsapp_utils.get_media_url(msg['image']['id'])
