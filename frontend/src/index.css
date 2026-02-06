@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+/* Custom scrollbar hide (Optional) */
+body {
+  background-color: #050505;
+  color: white;
+  overflow-x: hidden;
+}
+::-webkit-scrollbar {
+  width: 0px;
+  background: transparent;
+}
