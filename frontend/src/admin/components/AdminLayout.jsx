@@ -1,95 +1,110 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../lib/supabase'; // Path eka hariyata balanna
-import { Lock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
+import { LayoutDashboard, ShoppingCart, Package, Users, LogOut, Menu, X, ChevronRight } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
-const AdminLogin = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+const AdminLayout = () => {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    try {
-      const { data: { user }, error: authError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (authError) throw authError;
-
+  useEffect(() => {
+    const checkAdmin = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        navigate('/admin/login');
+        return;
+      }
+      
       const { data: profile } = await supabase
         .from('profiles')
         .select('role')
         .eq('id', user.id)
         .single();
 
-      if (profile?.role === 'admin') {
-        navigate('/admin/dashboard');
-      } else {
-        await supabase.auth.signOut();
-        setError("Admin Access Denied.");
+      if (profile?.role !== 'admin') {
+        navigate('/');
       }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    };
+    checkAdmin();
+  }, [navigate]);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate('/admin/login');
   };
 
-  return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-      <div className="bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-700">
-        <div className="flex justify-center mb-6">
-          <div className="p-3 bg-cyan-500/20 rounded-full text-cyan-400">
-            <Lock size={32} />
-          </div>
-        </div>
-        <h2 className="text-2xl font-bold text-center text-white mb-6">Admin Portal</h2>
-        
-        {error && (
-          <div className="bg-red-500/10 border border-red-500 text-red-500 p-3 rounded mb-4 text-sm text-center">
-            {error}
-          </div>
-        )}
+  const menuItems = [
+    { path: '/admin/dashboard', name: 'Overview', icon: LayoutDashboard },
+    { path: '/admin/orders', name: 'Pending Slips', icon: ShoppingCart },
+    { path: '/admin/packages', name: 'Packages', icon: Package },
+    { path: '/admin/users', name: 'Students', icon: Users },
+  ];
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-gray-400 text-sm mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 text-white rounded p-2 focus:border-cyan-500 focus:outline-none"
-              required
-            />
+  return (
+    <div className="flex h-screen bg-black text-white font-sans selection:bg-yellow-500 selection:text-black">
+      
+      {/* Sidebar - Black & Gold Theme */}
+      <div className={`${isSidebarOpen ? 'w-72' : 'w-20'} bg-neutral-900/50 backdrop-blur-md border-r border-neutral-800 transition-all duration-300 flex flex-col relative`}>
+        
+        {/* Logo Area */}
+        <div className="p-6 flex items-center justify-between border-b border-neutral-800/50">
+          <div className={`flex items-center gap-2 ${!isSidebarOpen && 'hidden'}`}>
+             <div className="w-3 h-8 bg-yellow-500 rounded-sm"></div>
+             <h1 className="font-bold text-xl tracking-wider">MY<span className="text-yellow-500">GURU</span></h1>
           </div>
-          <div>
-            <label className="block text-gray-400 text-sm mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 text-white rounded p-2 focus:border-cyan-500 focus:outline-none"
-              required
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50"
-          >
-            {loading ? 'Checking...' : 'Login Access'}
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-neutral-800 rounded text-yellow-500">
+            {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
-        </form>
+        </div>
+
+        {/* Menu Items */}
+        <nav className="flex-1 p-4 space-y-2 mt-4">
+          {menuItems.map((item) => {
+            const isActive = location.pathname === item.path;
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                className={`flex items-center p-3 rounded-xl transition-all duration-200 group ${
+                  isActive 
+                  ? 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20' 
+                  : 'text-gray-400 hover:bg-neutral-800 hover:text-white'
+                }`}
+              >
+                <item.icon size={22} className={`${isActive ? 'text-yellow-500' : 'text-gray-500 group-hover:text-white'}`} />
+                
+                {isSidebarOpen && (
+                  <div className="flex justify-between w-full items-center ml-3">
+                    <span className="font-medium text-sm">{item.name}</span>
+                    {isActive && <ChevronRight size={16} />}
+                  </div>
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Logout Section */}
+        <div className="p-4 border-t border-neutral-800">
+          <button onClick={handleLogout} className="flex items-center w-full p-3 rounded-xl text-neutral-400 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+            <LogOut size={20} />
+            <span className={`ml-3 text-sm font-medium ${!isSidebarOpen && 'hidden'}`}>Sign Out</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-auto bg-black p-8 relative">
+        {/* Background Gradient for Main Content */}
+        <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-neutral-900 to-black pointer-events-none" />
+        
+        <div className="relative z-10">
+            <Outlet /> 
+        </div>
       </div>
     </div>
   );
 };
 
-export default AdminLogin;
+export default AdminLayout;

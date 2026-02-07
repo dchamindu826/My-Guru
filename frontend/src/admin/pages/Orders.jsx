@@ -1,106 +1,121 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
-import { Check, X, Eye, Loader } from 'lucide-react';
+import { Check, X, AlertTriangle, ScanLine, Smartphone, Zap, MessageSquare } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
 const Orders = () => {
   const [slips, setSlips] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(null);
+  const [selectedSlip, setSelectedSlip] = useState(null);
+  const [smsText, setSmsText] = useState('');
+  const [analyzing, setAnalyzing] = useState(false);
 
-  useEffect(() => {
-    fetchSlips();
-  }, []);
+  useEffect(() => { fetchSlips(); }, []);
 
   const fetchSlips = async () => {
-    try {
-      const res = await api.get('/pending-slips');
-      setSlips(res.data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
+    const { data } = await supabase
+      .from('payments')
+      .select('*, profiles(full_name)')
+      .order('created_at', { ascending: false });
+    if (data) setSlips(data);
   };
 
-  const handleAction = async (id, userId, action, packageName) => {
-    if (!window.confirm(`Are you sure you want to ${action}?`)) return;
-    setProcessing(id);
-    
+  const runAiCheck = async () => {
+    if (!smsText) return alert("Please paste the Bank SMS first!");
+    setAnalyzing(true);
     try {
-      await api.post('/process-slip', {
-        payment_id: id,
-        user_id: userId,
-        action: action,
-        package_name: packageName // Backend එකට යවනවා User Upgrade කරන්න
-      });
-      
-      // ලිස්ට් එකෙන් අයින් කරන්න
-      setSlips(slips.filter(slip => slip.id !== id));
-      alert(`Successfully ${action}ed!`);
-    } catch (error) {
-      alert("Error processing slip");
+        const res = await api.post('/verify-slip-ai', {
+            payment_id: selectedSlip.id,
+            sms_text: smsText
+        });
+        alert(`AI Analysis: ${res.data.data.is_match ? "MATCHED! ✅" : "MISMATCH! ❌"}`);
+        fetchSlips(); // Refresh UI
+        setSelectedSlip(null);
+        setSmsText('');
+    } catch (e) {
+        alert("AI Error. Check console.");
+        console.error(e);
     } finally {
-      setProcessing(null);
+        setAnalyzing(false);
     }
   };
-
-  if (loading) return <div className="text-white">Loading Slips...</div>;
 
   return (
-    <div>
-      <h2 className="text-2xl font-bold text-white mb-6">Pending Slip Verifications</h2>
+    <div className="flex h-[calc(100vh-100px)] gap-6 p-4">
       
-      <div className="bg-gray-800 rounded-xl overflow-hidden border border-gray-700">
-        <table className="w-full text-left text-gray-300">
-          <thead className="bg-gray-900 text-gray-400 uppercase text-xs">
-            <tr>
-              <th className="p-4">Student Name</th>
-              <th className="p-4">Package</th>
-              <th className="p-4">Slip</th>
-              <th className="p-4">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-700">
-            {slips.length === 0 ? (
-                <tr><td colSpan="4" className="p-4 text-center">No pending slips</td></tr>
-            ) : (
-                slips.map((slip) => (
-                <tr key={slip.id} className="hover:bg-gray-750">
-                    <td className="p-4 font-medium text-white">
-                        {slip.profiles?.full_name || 'Unknown'} <br/>
-                        <span className="text-xs text-gray-500">{slip.profiles?.email}</span>
-                    </td>
-                    <td className="p-4">
-                        <span className="bg-blue-900 text-blue-300 py-1 px-2 rounded text-xs">
-                             Package Request
-                        </span>
-                    </td>
-                    <td className="p-4">
-                        <a href={slip.slip_url} target="_blank" rel="noreferrer" className="flex items-center text-cyan-400 hover:underline">
-                            <Eye size={16} className="mr-2" /> View Slip
-                        </a>
-                    </td>
-                    <td className="p-4 flex space-x-2">
-                        <button 
-                            onClick={() => handleAction(slip.id, slip.user_id, 'approve', 'Genius')} // Package name eka dynamic ganna puluwan nam hodai
-                            disabled={processing === slip.id}
-                            className="bg-green-600 hover:bg-green-700 text-white p-2 rounded transition"
-                        >
-                            {processing === slip.id ? <Loader className="animate-spin" size={18}/> : <Check size={18} />}
-                        </button>
-                        <button 
-                            onClick={() => handleAction(slip.id, slip.user_id, 'reject')}
-                            disabled={processing === slip.id}
-                            className="bg-red-600 hover:bg-red-700 text-white p-2 rounded transition"
-                        >
-                            <X size={18} />
-                        </button>
-                    </td>
-                </tr>
-                ))
-            )}
-          </tbody>
-        </table>
+      {/* 1. Slip List */}
+      <div className="w-1/4 bg-neutral-900/80 border border-neutral-800 rounded-2xl overflow-hidden flex flex-col">
+        <div className="p-4 bg-neutral-900 border-b border-neutral-800">
+            <h2 className="text-white font-bold flex items-center gap-2"><Smartphone size={18} className="text-yellow-500"/> Slips</h2>
+        </div>
+        <div className="overflow-y-auto flex-1 p-2 space-y-2">
+          {slips.map((slip) => (
+            <div key={slip.id} onClick={() => setSelectedSlip(slip)}
+              className={`p-3 rounded-lg cursor-pointer border ${selectedSlip?.id === slip.id ? 'border-yellow-500 bg-yellow-500/10' : 'border-neutral-800 bg-neutral-900'}`}>
+              <div className="flex justify-between"><span className="text-white font-bold">{slip.profiles?.full_name}</span><span className="text-cyan-400">Rs.{slip.amount}</span></div>
+              <div className="text-xs text-gray-500 mt-1 uppercase">{slip.status}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 2. Main AI Cockpit */}
+      <div className="flex-1 bg-black border border-neutral-800 rounded-2xl p-6 flex gap-6 relative overflow-hidden">
+        {selectedSlip ? (
+            <>
+                {/* Left: Slip Image */}
+                <div className="w-1/2 flex flex-col gap-4">
+                    <div className="bg-neutral-900 h-full rounded-xl border border-neutral-700 overflow-hidden relative">
+                        <img src={selectedSlip.slip_url} className="w-full h-full object-contain" alt="Slip" />
+                        {selectedSlip.ai_confidence > 0 && (
+                            <div className="absolute top-4 right-4 bg-black/80 text-green-400 px-3 py-1 rounded-full border border-green-500/50 text-sm font-bold shadow-[0_0_15px_rgba(34,197,94,0.4)]">
+                                AI Confidence: {selectedSlip.ai_confidence}%
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Right: SMS Input & AI Controls */}
+                <div className="w-1/2 flex flex-col gap-4">
+                    
+                    {/* SMS Simulator Box */}
+                    <div className="bg-neutral-900/50 p-4 rounded-xl border border-neutral-700">
+                        <label className="text-gray-400 text-sm mb-2 flex items-center gap-2">
+                            <MessageSquare size={16} className="text-cyan-400"/> Paste Bank SMS Here
+                        </label>
+                        <textarea 
+                            className="w-full h-32 bg-black border border-neutral-600 rounded-lg p-3 text-green-400 font-mono text-sm focus:border-cyan-500 outline-none"
+                            placeholder="Example: Bank: Sampath | Ref: 123456 | Amount: Rs. 1500.00 Credited..."
+                            value={selectedSlip.bank_sms_text || smsText}
+                            onChange={(e) => setSmsText(e.target.value)}
+                            disabled={!!selectedSlip.bank_sms_text} // SMS already there
+                        />
+                    </div>
+
+                    {/* AI Results Display */}
+                    {selectedSlip.extracted_data && (
+                        <div className="bg-green-900/10 border border-green-500/30 p-4 rounded-xl">
+                            <h4 className="text-green-400 font-bold mb-2 flex items-center gap-2"><Check size={16}/> AI Match Results</h4>
+                            <p className="text-gray-300 text-sm">Reason: {selectedSlip.extracted_data.reason}</p>
+                        </div>
+                    )}
+
+                    {/* Action Buttons */}
+                    <button 
+                        onClick={runAiCheck}
+                        disabled={analyzing || !!selectedSlip.extracted_data}
+                        className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-3 transition-all ${analyzing ? 'bg-gray-700 text-gray-400' : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-[0_0_20px_rgba(6,182,212,0.4)]'}`}
+                    >
+                        {analyzing ? "AI SCANNING..." : <><Zap size={20} /> RUN AI VERIFICATION</>}
+                    </button>
+
+                </div>
+            </>
+        ) : (
+            <div className="m-auto text-center opacity-40">
+                <ScanLine size={80} className="mx-auto mb-4 text-cyan-500"/>
+                <h2 className="text-2xl font-bold text-white">Select a Slip</h2>
+            </div>
+        )}
       </div>
     </div>
   );

@@ -2,23 +2,29 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Check, Zap, Star, Crown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext'; // Import Auth Context
+import { useAuth } from '../context/AuthContext'; // Auth Context එක Import කරගන්න
 
 export default function Pricing() {
   const navigate = useNavigate();
-  const { user, loginWithGoogle } = useAuth(); // Get user and login function
+  const { user, loginWithGoogle } = useAuth(); // User ඉන්නවද බලන්න
 
-  // Handle Plan Selection Logic
-  const handlePlanClick = (planName) => {
+  // Plan Button Click Logic
+  const handlePlanClick = (plan) => {
     if (user) {
-        // If user is logged in
-        if (planName === 'Starter') {
-            navigate('/chat'); // Free plan goes to chat directly
+        // User ලොග් වෙලා නම්
+        if (plan.name === 'Starter') {
+            navigate('/chat'); // Free නම් Chat එකට
         } else {
-            navigate('/checkout'); // Paid plans go to checkout
+            // Paid නම් විස්තරත් එක්ක Checkout එකට
+            navigate('/checkout', { 
+                state: { 
+                    planName: plan.name, 
+                    price: plan.price 
+                } 
+            });
         }
     } else {
-        // If not logged in, prompt login
+        // User ලොග් වෙලා නැත්නම් Login වෙන්න කියනවා
         loginWithGoogle();
     }
   };
@@ -121,7 +127,7 @@ export default function Pricing() {
 
                     {/* Button */}
                     <button 
-                        onClick={() => handlePlanClick(plan.name)}
+                        onClick={() => handlePlanClick(plan)}
                         className={`w-full py-5 rounded-2xl font-bold text-sm mt-8 transition-all duration-300 ${
                             plan.popular 
                             ? 'bg-gradient-to-r from-amber-500 to-yellow-600 text-black hover:scale-105 shadow-lg shadow-amber-500/20' 
